@@ -63,12 +63,14 @@ create table if not exists prayer_settings (
   isha_adjust     int  default 0,
   prayer_config   jsonb,  -- { fajr: { adhanMode, adhanOffset, adhanFixed, iqamaMode, iqamaOffset, iqamaFixed }, ... }
   extra_timings   jsonb,  -- { fajr: [], maghrib: [], jummah: ["1:15 PM"] }
+  times_source    text default 'backend',  -- 'backend' | 'excel'
   created_at      timestamptz default now()
 );
 
 -- Migration for existing installations (run in Supabase SQL Editor):
 -- alter table prayer_settings add column if not exists prayer_config jsonb;
 -- alter table prayer_settings add column if not exists extra_timings jsonb;
+-- alter table prayer_settings add column if not exists times_source text default 'backend';
 
 -- 4. Daily prayer times per masjid
 create table if not exists prayer_times (

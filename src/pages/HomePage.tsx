@@ -340,6 +340,21 @@ const Dashboard: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState("");
   const [uploadError, setUploadError] = useState("");
+  const [xlsxPreview, setXlsxPreview] = useState<{
+    sheets: string[];
+    sheetRows: Record<string, string[][]>;
+    selectedSheet: string;
+    headerRowIdx: number;
+  } | null>(null);
+  const [colMap, setColMap] = useState<Record<string, string>>({
+    date: "", day: "", fajr: "", dhuhr: "", asr: "", maghrib: "", isha: "",
+    fajr_iqama: "", dhuhr_iqama: "", asr_iqama: "", maghrib_iqama: "", isha_iqama: "",
+    jummah1: "", jummah2: "", jummah3: "",
+  });
+  const [importMonth, setImportMonth] = useState<string>(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  });
   const defaultExtra = { fajr: [] as string[], maghrib: [] as string[], jummah: ["1:15 PM"] };
   const [extraTimings, setExtraTimings] = useState<{ fajr: string[]; maghrib: string[]; jummah: string[] }>(defaultExtra);
   // ── Jamaat settings ───────────────────────────────────────────────────
@@ -444,6 +459,7 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
     if (!masjidId) { setPrayerLoading(false); return; }
+    setPrayerLoading(true);
 
     supabaseAdmin
       .from("prayer_times")
@@ -471,24 +487,30 @@ const Dashboard: React.FC = () => {
       });
   }, [selectedYear]);
 
-  // ── Sync selectedMonth when year changes ──────────────────────────────
+  // ── Sync selectedMonth when year changes (preserve same month number) ──
   useEffect(() => {
-    setSelectedMonth(`${selectedYear}-${String(new Date().getMonth() + 1).padStart(2, "0")}`);
+    const monthNum = selectedMonth.slice(5, 7);
+    setSelectedMonth(`${selectedYear}-${monthNum}`);
   }, [selectedYear]);
 
-  // ── Load extra timings (jummah) from Supabase ─────────────────────────
+  // ── Load prayer settings (extra_timings + times_source) from Supabase ──
   useEffect(() => {
     const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
     if (!masjidId) return;
     supabaseAdmin
       .from("prayer_settings")
-      .select("extra_timings")
+      .select("extra_timings, times_source")
       .eq("masjid_id", masjidId)
       .maybeSingle()
       .then(({ data }) => {
         if (data?.extra_timings) setExtraTimings(data.extra_timings as typeof defaultExtra);
+        if (data?.times_source === "excel" || data?.times_source === "backend") {
+          setPrayerSource(data.times_source);
+        }
+        prayerSourceLoaded.current = true;
       });
   }, []);
+
 
   // ── Handlers ──────────────────────────────────────────────────────────
   const handleLogout = () => { localStorage.clear(); sessionStorage.clear(); navigate("/login"); };
@@ -565,6 +587,11 @@ const Dashboard: React.FC = () => {
     setPendingSource(null);
     const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
 
+    // Persist the new source to DB immediately
+    if (masjidId) {
+      await supabaseAdmin.from("prayer_settings").upsert({ masjid_id: masjidId, times_source: newSource }, { onConflict: "masjid_id" });
+    }
+
     if (newSource === "excel") {
       // Delete all prayer times from DB and clear state
       if (masjidId) await supabaseAdmin.from("prayer_times").delete().eq("masjid_id", masjidId);
@@ -609,124 +636,138 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const autoMapColumns = (headers: string[]) => {
+    const find = (kws: string[]) => {
+      const h = headers.find(h => kws.some(k => h.toLowerCase().includes(k))) ?? "";
+      return h;
+    };
+    setColMap({
+      date:          find(["date"]),
+      day:           find(["day", "no."]),
+      fajr:          find(["fajr begin", "fajr start", "fajr adhan", "fajr azan"]) || find(["fajr"]),
+      dhuhr:         find(["dhuhr begin", "zuhr begin", "dhuhr start", "zuhr start"]) || find(["dhuhr", "zuhr"]),
+      asr:           find(["asr begin", "asr start"]) || find(["asr"]),
+      maghrib:       find(["maghrib begin", "maghrib start", "sunset"]) || find(["maghrib"]),
+      isha:          find(["isha begin", "isha start"]) || find(["isha"]),
+      fajr_iqama:    find(["fajr iqama", "fajr jamat", "fajr jamaat"]),
+      dhuhr_iqama:   find(["dhuhr iqama", "zuhr iqama", "dhuhr jamat", "zuhr jamat"]),
+      asr_iqama:     find(["asr iqama", "asr jamat"]),
+      maghrib_iqama: find(["maghrib iqama", "maghrib jamat"]),
+      isha_iqama:    find(["isha iqama", "isha jamat"]),
+      jummah1:       find(["jumah 1", "jummah 1", "1st jum"]) || find(["jumah", "jummah"]),
+      jummah2:       find(["jumah 2", "jummah 2", "2nd jum"]),
+      jummah3:       find(["jumah 3", "jummah 3", "3rd jum"]),
+    });
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls")) { setUploadFile(file); setUploadError(""); }
-      else { setUploadError("Please upload an Excel file (.xlsx or .xls)"); setUploadFile(null); }
+    if (!file) return;
+    if (!file.name.endsWith(".xlsx") && !file.name.endsWith(".xls")) {
+      setUploadError("Please upload an Excel file (.xlsx or .xls)"); return;
     }
+    setUploadFile(file); setUploadError("");
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const wb = XLSX.read(ev.target?.result, { type: "binary" });
+        const sheetRows: Record<string, string[][]> = {};
+        for (const name of wb.SheetNames) {
+          sheetRows[name] = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false }) as string[][];
+        }
+        const firstSheet = wb.SheetNames[0];
+        const rows = sheetRows[firstSheet];
+        const keywords = ["fajr", "dhuhr", "zuhr", "asr", "maghrib", "isha", "date", "day"];
+        const headerIdx = rows.findIndex(r => r.some(c => keywords.some(k => String(c ?? "").toLowerCase().includes(k))));
+        setXlsxPreview({ sheets: wb.SheetNames, sheetRows, selectedSheet: firstSheet, headerRowIdx: Math.max(0, headerIdx) });
+        if (headerIdx >= 0) autoMapColumns(rows[headerIdx].map(h => String(h ?? "").trim()));
+      } catch { setUploadError("Failed to read file."); }
+    };
+    reader.readAsBinaryString(file);
   };
 
-  const handleUploadPrayerTimes = async () => {
-    if (!uploadFile) { setUploadError("Please select a file"); return; }
+  const handleConfirmImport = async () => {
+    if (!xlsxPreview) return;
     setIsUploading(true); setUploadError(""); setUploadSuccess("");
     try {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        try {
-          const data = e.target?.result;
-          const workbook = XLSX.read(data, { type: "binary" });
-          const ws = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = xlsxPreview.sheetRows[xlsxPreview.selectedSheet];
+      const headers = rows[xlsxPreview.headerRowIdx].map(h => String(h ?? "").trim());
+      const dataRows = rows.slice(xlsxPreview.headerRowIdx + 1).filter(r => r.some(c => c !== "" && c != null));
+      const ci = (col: string) => col ? headers.indexOf(col) : -1;
+      const cv = (row: string[], col: string) => { const i = ci(col); return i >= 0 ? String(row[i] ?? "").trim() : ""; };
 
-          // Read raw rows to skip possible title row
-          const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1 }) as string[][];
-          // Find the header row (first row containing "Fajr" or "fajr")
-          const headerRowIdx = rawRows.findIndex(r => r.some(c => String(c).toLowerCase().includes("fajr")));
-          if (headerRowIdx === -1) { setUploadError("Could not find headers. Need a Fajr column."); setIsUploading(false); return; }
-          const headers = rawRows[headerRowIdx].map(h => String(h ?? ""));
-          const dataRows = rawRows.slice(headerRowIdx + 1).filter(r => r.some(c => c !== "" && c != null));
-
-          const col = (name: string) => headers.findIndex(h => h.toLowerCase().includes(name.toLowerCase()));
-
-          // Detect IST-style format: has "Begins" or "Day" column
-          const isISTFormat = headers.some(h => h.toLowerCase().includes("begins")) || headers.some(h => h.toLowerCase() === "day");
-
-          const parsed: PrayerTime[] = [];
-
-          if (isISTFormat) {
-            // IST format: Day | Fajr Begins | Fajr Iqama | Sunrise | Zuhr Begins | Zuhr Iqama | Asr Begins | Asr Iqama | Sunset | Isha Begins | Isha Iqama | Jumah...
-            const iDay     = col("day");
-            const iFajrB   = col("fajr begins");
-            const iZuhrB   = headers.findIndex(h => (h.toLowerCase().includes("zuhr") || h.toLowerCase().includes("dhuhr")) && h.toLowerCase().includes("begins"));
-            const iAsrB    = col("asr begins");
-            const iSunset  = col("sunset");
-            const iIshaB   = col("isha begins");
-
-            // Jummah columns
-            const jummahCols = headers.map((h, i) => h.toLowerCase().includes("jumah") || h.toLowerCase().includes("jummah") ? i : -1).filter(i => i !== -1);
-
-            for (const row of dataRows) {
-              const dayNum = parseInt(String(row[iDay] ?? ""));
-              if (!dayNum || isNaN(dayNum)) continue;
-              const dateStr = `${selectedMonth}-${String(dayNum).padStart(2, "0")}`;
-              parsed.push({
-                date:    dateStr,
-                fajr:    String(row[iFajrB]  ?? ""),
-                dhuhr:   String(row[iZuhrB]  ?? ""),
-                asr:     String(row[iAsrB]   ?? ""),
-                maghrib: String(row[iSunset] ?? ""),
-                isha:    String(row[iIshaB]  ?? ""),
-              });
-            }
-
-            // Auto-set fixed iqama times from first data row into iqama schedule
-            if (dataRows.length > 0) {
-              const r = dataRows[0];
-              // Auto-set Jummah times
-              if (jummahCols.length > 0) {
-                const jTimes = jummahCols.map(ci => String(r[ci] ?? "")).filter(Boolean);
-                if (jTimes.length > 0) setExtraTimings(prev => ({ ...prev, jummah: jTimes }));
-              }
-            }
+      const parsed: PrayerTime[] = [];
+      for (const row of dataRows) {
+        let dateStr = "";
+        if (colMap.date) {
+          const raw = cv(row, colMap.date);
+          // Try ISO date, Excel serial, or "DD/MM/YYYY" etc.
+          if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+            dateStr = raw;
+          } else if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/.test(raw)) {
+            const parts = raw.split(/[\/\-]/);
+            dateStr = `${parts[2]}-${parts[0].padStart(2, "0")}-${parts[1].padStart(2, "0")}`;
+          } else if (!isNaN(Number(raw)) && Number(raw) > 40000) {
+            // Excel serial date
+            const d = new Date(Math.round((Number(raw) - 25569) * 86400 * 1000));
+            dateStr = d.toISOString().slice(0, 10);
           } else {
-            // Generic format: Date | Fajr | Dhuhr | Asr | Maghrib | Isha
-            const required = ["date", "fajr", "dhuhr", "asr", "maghrib", "isha"];
-            const missing = required.filter(r => col(r) === -1);
-            if (missing.length > 0) { setUploadError(`Missing columns: ${missing.join(", ")}`); setIsUploading(false); return; }
-            for (const row of dataRows) {
-              parsed.push({
-                date:    String(row[col("date")]    ?? ""),
-                fajr:    String(row[col("fajr")]    ?? ""),
-                dhuhr:   String(row[col("dhuhr")]   ?? ""),
-                asr:     String(row[col("asr")]     ?? ""),
-                maghrib: String(row[col("maghrib")] ?? ""),
-                isha:    String(row[col("isha")]    ?? ""),
-              });
-            }
+            const parsed2 = new Date(raw);
+            if (!isNaN(parsed2.getTime())) dateStr = parsed2.toISOString().slice(0, 10);
           }
+        } else if (colMap.day) {
+          const dayNum = parseInt(cv(row, colMap.day));
+          if (!dayNum || isNaN(dayNum)) continue;
+          dateStr = `${importMonth}-${String(dayNum).padStart(2, "0")}`;
+        }
+        if (!dateStr) continue;
 
-          if (parsed.length === 0) { setUploadError("No data rows found."); setIsUploading(false); return; }
+        const entry: PrayerTime = {
+          date:    dateStr,
+          fajr:    cv(row, colMap.fajr),
+          dhuhr:   cv(row, colMap.dhuhr),
+          asr:     cv(row, colMap.asr),
+          maghrib: cv(row, colMap.maghrib),
+          isha:    cv(row, colMap.isha),
+        };
+        if (colMap.fajr_iqama)    entry.fajr_iqama    = cv(row, colMap.fajr_iqama);
+        if (colMap.dhuhr_iqama)   entry.dhuhr_iqama   = cv(row, colMap.dhuhr_iqama);
+        if (colMap.asr_iqama)     entry.asr_iqama     = cv(row, colMap.asr_iqama);
+        if (colMap.maghrib_iqama) entry.maghrib_iqama = cv(row, colMap.maghrib_iqama);
+        if (colMap.isha_iqama)    entry.isha_iqama    = cv(row, colMap.isha_iqama);
+        parsed.push(entry);
+      }
 
-          // Add default adhan/iqama to each parsed row
-          const parsedWithDefaults = parsed.map(row => ({ ...row, ...addDefaultAdhanIqama(row) }));
+      if (parsed.length === 0) { setUploadError("No rows could be extracted. Check your column mapping."); setIsUploading(false); return; }
 
-          const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
-          if (masjidId) {
-            const dbRows = parsedWithDefaults.map(row => ({ masjid_id: masjidId, ...row }));
-            for (let i = 0; i < dbRows.length; i += 100) {
-              await supabaseAdmin.from("prayer_times").upsert(dbRows.slice(i, i + 100), { onConflict: "masjid_id,date" });
-            }
-          }
+      // Extract Jummah from first Friday row or first data row
+      const jTimes = [colMap.jummah1, colMap.jummah2, colMap.jummah3]
+        .map(col => col ? cv(dataRows[0], col) : "").filter(Boolean);
+      if (jTimes.length > 0) setExtraTimings(prev => ({ ...prev, jummah: jTimes }));
 
-          const grouped: Record<string, PrayerTime[]> = {};
-          for (const row of parsedWithDefaults) {
-            const key = row.date?.slice(0, 7);
-            if (key) { if (!grouped[key]) grouped[key] = []; grouped[key].push(row as PrayerTime); }
-          }
-          setPrayerTimesByMonth(prev => ({ ...prev, ...grouped }));
-
-          const fmtD = (d: string) => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-          const firstDate = parsed[0]?.date;
-          const lastDate  = parsed[parsed.length - 1]?.date;
-          setUploadSuccess(`${parsed.length} days uploaded · ${fmtD(firstDate)} – ${fmtD(lastDate)} · defaults applied`);
-          setUploadFile(null);
-        } catch (err) { setUploadError("Failed to parse: " + (err as Error).message); }
-        finally { setIsUploading(false); }
-      };
-      reader.onerror = () => { setUploadError("Failed to read file"); setIsUploading(false); };
-      reader.readAsBinaryString(uploadFile);
-    } catch { setUploadError("Upload failed."); setIsUploading(false); }
+      const parsedWithDefaults = parsed.map(row => ({ ...row, ...addDefaultAdhanIqama(row) }));
+      const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+      if (masjidId) {
+        const dbRows = parsedWithDefaults.map(row => ({ masjid_id: masjidId, ...row }));
+        for (let i = 0; i < dbRows.length; i += 100) {
+          await supabaseAdmin.from("prayer_times").upsert(dbRows.slice(i, i + 100), { onConflict: "masjid_id,date" });
+        }
+      }
+      const grouped: Record<string, PrayerTime[]> = {};
+      for (const row of parsedWithDefaults) {
+        const key = row.date?.slice(0, 7);
+        if (key) { if (!grouped[key]) grouped[key] = []; grouped[key].push(row as PrayerTime); }
+      }
+      setPrayerTimesByMonth(prev => ({ ...prev, ...grouped }));
+      const fmtD = (d: string) => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      setUploadSuccess(`${parsed.length} days imported · ${fmtD(parsed[0].date)} – ${fmtD(parsed[parsed.length - 1].date)}`);
+      setTimeout(() => setUploadSuccess(""), 4000);
+      setXlsxPreview(null); setUploadFile(null);
+    } catch (err) { setUploadError("Import failed: " + (err as Error).message); }
+    finally { setIsUploading(false); }
   };
+
+  const handleUploadPrayerTimes = handleConfirmImport;
 
   const handleEditStartTime = (dayIdx: number, field: keyof PrayerTime, value: string) => {
     setPrayerTimesByMonth(prev => ({
@@ -1415,12 +1456,15 @@ const Dashboard: React.FC = () => {
                         {uploadFile ? uploadFile.name : "Select .xlsx"}
                       </label>
                     </div>
-                    <button onClick={handleUploadPrayerTimes} disabled={!uploadFile || isUploading}
-                      className={`px-5 py-2.5 rounded-xl font-black text-sm transition-all ${
-                        !uploadFile || isUploading ? "bg-zinc-700 text-zinc-500 cursor-not-allowed" : `${theme.btn} hover:scale-[1.02]`
-                      }`}>
-                      {isUploading ? "Uploading..." : "Upload"}
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => setSelectedYear(y => y - 1)} className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 transition-all">
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" /></svg>
+                      </button>
+                      <span className="text-sm font-black text-white w-10 text-center">{selectedYear}</span>
+                      <button onClick={() => setSelectedYear(y => y + 1)} className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 transition-all">
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+                      </button>
+                    </div>
                   </>
                 )}
               </div>
@@ -2451,6 +2495,237 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* ── Excel Column Mapping Modal ── */}
+      {xlsxPreview && (() => {
+        const rows = xlsxPreview.sheetRows[xlsxPreview.selectedSheet];
+        const headers = rows[xlsxPreview.headerRowIdx]?.map(h => String(h ?? "").trim()) ?? [];
+        const previewRows = rows.slice(xlsxPreview.headerRowIdx + 1).filter(r => r.some(c => c)).slice(0, 5);
+        const colOpts = ["", ...headers];
+
+        const REQUIRED_FIELDS = [
+          { key: "date",    label: "Date",         hint: "Full date column (YYYY-MM-DD, DD/MM/YYYY, etc.)" },
+          { key: "day",     label: "Day #",         hint: "Day-of-month number (1–31). Used if no full date column." },
+          { key: "fajr",    label: "Fajr",          hint: "Fajr start / adhan time" },
+          { key: "dhuhr",   label: "Dhuhr / Zuhr",  hint: "Dhuhr start time" },
+          { key: "asr",     label: "Asr",           hint: "Asr start time" },
+          { key: "maghrib", label: "Maghrib",       hint: "Maghrib start time" },
+          { key: "isha",    label: "Isha",          hint: "Isha start time" },
+        ];
+        const IQAMA_FIELDS = [
+          { key: "fajr_iqama",    label: "Fajr Iqama" },
+          { key: "dhuhr_iqama",   label: "Dhuhr Iqama" },
+          { key: "asr_iqama",     label: "Asr Iqama" },
+          { key: "maghrib_iqama", label: "Maghrib Iqama" },
+          { key: "isha_iqama",    label: "Isha Iqama" },
+        ];
+        const JUMMAH_FIELDS = [
+          { key: "jummah1", label: "Jummah 1" },
+          { key: "jummah2", label: "Jummah 2" },
+          { key: "jummah3", label: "Jummah 3" },
+        ];
+
+        const sel = (key: string) => (
+          <select
+            className="w-full bg-zinc-950 border border-white/8 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500/40 transition-colors appearance-none"
+            value={colMap[key] ?? ""}
+            onChange={e => setColMap(m => ({ ...m, [key]: e.target.value }))}
+          >
+            {colOpts.map(o => <option key={o} value={o}>{o || "— none —"}</option>)}
+          </select>
+        );
+
+        const PRAYER_ROWS = [
+          { key: "fajr",    label: "Fajr",    arabic: "الفجر",   iqama: "fajr_iqama" },
+          { key: "dhuhr",   label: "Dhuhr",   arabic: "الظهر",   iqama: "dhuhr_iqama" },
+          { key: "asr",     label: "Asr",     arabic: "العصر",   iqama: "asr_iqama" },
+          { key: "maghrib", label: "Maghrib", arabic: "المغرب",  iqama: "maghrib_iqama" },
+          { key: "isha",    label: "Isha",    arabic: "العشاء",   iqama: "isha_iqama" },
+        ];
+
+        const mappedSet = new Set(Object.values(colMap).filter(Boolean));
+        const colLabel = (h: string) => {
+          const entry = Object.entries(colMap).find(([, v]) => v === h);
+          if (!entry) return null;
+          const labels: Record<string, string> = {
+            date: "Date", day: "Day #", fajr: "Fajr", dhuhr: "Dhuhr", asr: "Asr",
+            maghrib: "Maghrib", isha: "Isha", fajr_iqama: "Fajr Iqama",
+            dhuhr_iqama: "Dhuhr Iqama", asr_iqama: "Asr Iqama",
+            maghrib_iqama: "Maghrib Iqama", isha_iqama: "Isha Iqama",
+            jummah1: "Jummah 1", jummah2: "Jummah 2", jummah3: "Jummah 3",
+          };
+          return labels[entry[0]] ?? entry[0];
+        };
+
+        return (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" style={{ backdropFilter: "blur(8px)", backgroundColor: "rgba(0,0,0,0.88)" }}>
+            <div className="w-full max-w-5xl bg-zinc-900 border border-white/8 rounded-3xl shadow-2xl flex flex-col overflow-hidden" style={{ height: "90vh" }}>
+
+              {/* Header */}
+              <div className="flex items-center gap-4 px-8 py-4 border-b border-white/5">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 flex items-center justify-center shrink-0">
+                  <Icon d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" className={`w-5 h-5 ${theme.accent}`} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-lg font-black">Map Columns</h2>
+                  <p className="text-xs text-zinc-500 mt-0.5 truncate">{uploadFile?.name}</p>
+                </div>
+                {xlsxPreview.sheets.length > 1 && (
+                  <div className="flex items-center gap-1.5 bg-zinc-800/60 border border-white/8 rounded-xl p-1">
+                    {xlsxPreview.sheets.map(s => (
+                      <button key={s} onClick={() => {
+                        const newRows = xlsxPreview.sheetRows[s];
+                        const keywords = ["fajr","dhuhr","zuhr","asr","maghrib","isha","date","day"];
+                        const hi = newRows.findIndex(r => r.some(c => keywords.some(k => String(c ?? "").toLowerCase().includes(k))));
+                        setXlsxPreview(p => p ? { ...p, selectedSheet: s, headerRowIdx: Math.max(0, hi) } : p);
+                        if (hi >= 0) autoMapColumns(newRows[hi].map(h => String(h ?? "").trim()));
+                      }} className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${xlsxPreview.selectedSheet === s ? `${theme.accentBg} ${theme.accent}` : "text-zinc-500 hover:text-white"}`}>
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-zinc-500 font-bold">Header row</span>
+                  <input type="number" min={1} max={rows.length}
+                    value={xlsxPreview.headerRowIdx + 1}
+                    onChange={e => {
+                      const idx = Math.max(0, parseInt(e.target.value) - 1);
+                      setXlsxPreview(p => p ? { ...p, headerRowIdx: idx } : p);
+                      autoMapColumns((rows[idx] ?? []).map(h => String(h ?? "").trim()));
+                    }}
+                    className="w-14 bg-zinc-800 border border-white/10 rounded-lg px-2 py-1.5 text-sm text-white text-center focus:outline-none focus:border-emerald-500/40"
+                  />
+                </div>
+                <button onClick={() => { setXlsxPreview(null); setUploadFile(null); }} className="w-8 h-8 flex items-center justify-center rounded-xl text-zinc-500 hover:text-white hover:bg-white/8 transition-all shrink-0">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
+
+              <div className="flex flex-col flex-1 overflow-hidden">
+
+                {/* Top half: data preview */}
+                <div className="flex flex-col border-b border-white/5" style={{ flex: "0 0 40%" }}>
+                  <div className="flex items-center gap-2 px-7 pt-3 pb-2 shrink-0">
+                    <span className="text-xs font-black uppercase tracking-widest text-zinc-500">Data Preview</span>
+                    <span className="text-[10px] text-zinc-700 font-bold">· first 5 rows after header</span>
+                  </div>
+                  {headers.length > 0 ? (
+                    <div className="overflow-auto flex-1 px-5 pb-4">
+                      <table className="text-xs border-collapse w-max min-w-full">
+                        <thead>
+                          <tr>
+                            {headers.map((h, i) => {
+                              const label = colLabel(h);
+                              return (
+                                <th key={i} className={`px-4 py-2 text-left whitespace-nowrap border-b ${label ? "border-emerald-500/25 bg-emerald-500/5" : "border-white/5"}`}>
+                                  <div className={`font-black ${label ? theme.accent : "text-zinc-500"}`}>{h}</div>
+                                  {label && <div className={`text-[9px] font-black uppercase tracking-widest mt-0.5 opacity-60 ${theme.accent}`}>{label}</div>}
+                                </th>
+                              );
+                            })}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {previewRows.map((row, ri) => (
+                            <tr key={ri} className={ri % 2 === 0 ? "" : "bg-white/[0.02]"}>
+                              {headers.map((h, ci) => (
+                                <td key={ci} className={`px-4 py-1.5 whitespace-nowrap border-b border-white/[0.03] ${mappedSet.has(h) ? "text-white font-semibold" : "text-zinc-600"}`}>
+                                  {String(row[ci] ?? "")}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="flex-1 flex items-center justify-center text-zinc-600 text-sm px-7">
+                      No headers found at row {xlsxPreview.headerRowIdx + 1} — try a different header row number.
+                    </div>
+                  )}
+                </div>
+
+                {/* Bottom half: column mapping */}
+                <div className="flex-1 px-7 py-4 flex flex-col justify-between">
+
+                  {/* Date */}
+                  <div className="flex items-center gap-4 mb-3">
+                    <div className="w-24 shrink-0 flex items-center gap-1.5">
+                      <div className="w-1.5 h-3 rounded-full bg-blue-400/60 shrink-0"></div>
+                      <span className="text-xs font-black text-zinc-300">Date</span>
+                    </div>
+                    <div className="w-52">{sel("date")}</div>
+                    <span className="text-[10px] text-zinc-700 font-bold">YYYY-MM-DD · DD/MM/YYYY · Excel serial</span>
+                  </div>
+
+                  <div className="border-t border-white/5 mb-3" />
+
+                  {/* Prayer rows */}
+                  <div className="flex flex-col gap-1.5 mb-3">
+                    <div className="grid gap-3 items-center mb-1" style={{ gridTemplateColumns: "96px 1fr 1fr" }}>
+                      <div />
+                      <div className="text-[10px] font-black uppercase tracking-widest text-zinc-600 text-center">Adhan / Start</div>
+                      <div className="text-[10px] font-black uppercase tracking-widest text-zinc-600 text-center">Iqama</div>
+                    </div>
+                    {PRAYER_ROWS.map(p => (
+                      <div key={p.key} className="grid gap-3 items-center" style={{ gridTemplateColumns: "96px 1fr 1fr" }}>
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-1.5 h-3 rounded-full bg-emerald-400/60 shrink-0"></div>
+                          <div>
+                            <div className="text-sm font-black text-white leading-tight">{p.label}</div>
+                            <div className="text-[10px] text-zinc-600" style={{ fontFamily: "serif" }}>{p.arabic}</div>
+                          </div>
+                        </div>
+                        {sel(p.key)}
+                        {sel(p.iqama)}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="border-t border-white/5 mb-3" />
+
+                  {/* Jummah */}
+                  <div className="flex items-center gap-4">
+                    <div className="w-24 shrink-0 flex items-center gap-1.5">
+                      <div className="w-1.5 h-3 rounded-full bg-amber-400/60 shrink-0"></div>
+                      <span className="text-xs font-black text-zinc-300">Jummah</span>
+                    </div>
+                    <div className="flex gap-3 flex-1">
+                      {JUMMAH_FIELDS.map(f => (
+                        <div key={f.key} className="flex-1">
+                          <label className="text-[10px] font-bold text-zinc-600 mb-1 block">{f.label}</label>
+                          {sel(f.key)}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center gap-4 px-8 py-3 border-t border-white/5">
+                {uploadError
+                  ? <p className="text-red-400 text-sm font-bold flex-1">{uploadError}</p>
+                  : <p className="text-zinc-600 text-xs flex-1">Highlighted columns will be imported. Unmapped prayers use auto-calculated defaults.</p>
+                }
+                <button onClick={() => { setXlsxPreview(null); setUploadFile(null); }} className="px-5 py-2.5 rounded-xl font-bold border border-white/8 text-zinc-400 hover:bg-white/5 hover:text-white transition-all text-sm">
+                  Cancel
+                </button>
+                <button onClick={handleConfirmImport} disabled={isUploading || !colMap.date}
+                  className={`px-7 py-2.5 rounded-xl font-black text-sm transition-all flex items-center gap-2 ${isUploading || !colMap.date ? "bg-zinc-800 text-zinc-600 cursor-not-allowed" : `${theme.btn} hover:scale-[1.02]`}`}>
+                  {isUploading
+                    ? <><svg className="animate-spin w-4 h-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>Importing…</>
+                    : <>Import <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg></>
+                  }
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
     </div>
   );
 };
