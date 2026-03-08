@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { supabase } from "../lib/supabase";
 
 const LoginPage: React.FC = () => {
   const [isDark, setIsDark] = useState(true);
@@ -24,153 +25,51 @@ const LoginPage: React.FC = () => {
     rememberMe: false,
   });
 
-  // Get from environment variables
-  const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-  const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value =
-      e.target.type === "checkbox" ? e.target.checked : e.target.value;
-    setFormData({
-      ...formData,
-      [e.target.name]: value,
-    });
+    const value = e.target.type === "checkbox" ? e.target.checked : e.target.value;
+    setFormData({ ...formData, [e.target.name]: value });
     setError("");
   };
-
-  // Mock credentials for demo purposes
-  const MOCK_CREDENTIALS = [
-    { email: "admin@torontohifz.ca", password: "demo1234", masjid_name: "Toronto Hifz Academy", masjid_id: "demo-001" },
-    { email: "admin@alnoor.ca", password: "demo1234", masjid_name: "Al-Noor Masjid", masjid_id: "demo-002" },
-  ];
 
   const handleLogin = async () => {
     setIsLoading(true);
     setError("");
 
-    // Validate form
     if (!formData.email || !formData.password) {
       setError("Please fill in all fields");
       setIsLoading(false);
       return;
     }
 
-    // Email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(formData.email)) {
-      setError("Please enter a valid email address");
-      setIsLoading(false);
-      return;
-    }
-
-    // Check mock credentials first
-    const mockUser = MOCK_CREDENTIALS.find(
-      (c) => c.email === formData.email && c.password === formData.password
-    );
-    if (mockUser) {
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      const storage = formData.rememberMe ? localStorage : sessionStorage;
-      storage.setItem("access_token", "mock-token-" + Date.now());
-      storage.setItem("masjid_id", mockUser.masjid_id);
-      storage.setItem("masjid_name", mockUser.masjid_name);
-      storage.setItem("user_id", "mock-user-001");
-      navigate("/home");
-      return;
-    }
-
     try {
-      // Step 1: Authenticate with Supabase Auth
-      const authResponse = await fetch(
-        `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: SUPABASE_ANON_KEY,
-          },
-          body: JSON.stringify({
-            email: formData.email,
-            password: formData.password,
-          }),
-        }
-      );
+      // 1. Sign in with Supabase Auth
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: formData.email,
+        password: formData.password,
+      });
 
-      const authData = await authResponse.json();
+      if (authError) throw new Error(authError.message);
 
-      if (!authResponse.ok) {
-        throw new Error(
-          authData.error_description || "Invalid email or password"
-        );
-      }
-
-      // Store tokens
       const storage = formData.rememberMe ? localStorage : sessionStorage;
-      storage.setItem("access_token", authData.access_token);
-      storage.setItem("refresh_token", authData.refresh_token);
+      storage.setItem("access_token", authData.session!.access_token);
+      storage.setItem("user_id", authData.user!.id);
 
-      // Step 2: Get masjid_id from masjid_users table
-      const userResponse = await fetch(
-        `${SUPABASE_URL}/rest/v1/masjid_users?email=eq.${encodeURIComponent(
-          formData.email
-        )}&select=masjid_id,id`,
-        {
-          headers: {
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${authData.access_token}`,
-          },
-        }
-      );
+      // 2. Fetch the masjid linked to this user
+      const { data: masjid, error: masjidError } = await supabase
+        .from("masjids")
+        .select("id, masjid_name, status, onboarding_complete")
+        .eq("user_id", authData.user!.id)
+        .single();
 
-      if (!userResponse.ok) {
-        throw new Error("Failed to fetch user data");
-      }
+      if (masjidError || !masjid) throw new Error("No masjid linked to this account.");
+      if (masjid.status === "suspended") throw new Error("Your masjid has been suspended. Contact support.");
 
-      const userData = await userResponse.json();
+      storage.setItem("masjid_id", masjid.id);
+      storage.setItem("masjid_name", masjid.masjid_name);
 
-      if (!userData || userData.length === 0) {
-        throw new Error("User not linked to any masjid. Please contact admin.");
-      }
-
-      // Store masjid_id
-      storage.setItem("masjid_id", userData[0].masjid_id);
-      storage.setItem("user_id", userData[0].id);
-
-      // Step 3: Verify masjid is active
-      const masjidResponse = await fetch(
-        `${SUPABASE_URL}/rest/v1/masjid_registrations?id=eq.${userData[0].masjid_id}&select=status,masjid_name`,
-        {
-          headers: {
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${authData.access_token}`,
-          },
-        }
-      );
-
-      if (!masjidResponse.ok) {
-        throw new Error("Failed to verify masjid status");
-      }
-
-      const masjidData = await masjidResponse.json();
-
-      if (!masjidData || masjidData.length === 0) {
-        throw new Error("Masjid not found");
-      }
-
-      if (masjidData[0].status !== "active") {
-        throw new Error(
-          `Your masjid registration is ${masjidData[0].status}. Please contact admin.`
-        );
-      }
-
-      // Store masjid name for display
-      storage.setItem("masjid_name", masjidData[0].masjid_name);
-
-      // Success - redirect to dashboard
-      console.log("Login successful!");
-      navigate("/home");
-    } catch (err: any) {
-      setError(err.message || "Login failed. Please try again.");
-      console.error("Login error:", err);
+      navigate(masjid.onboarding_complete ? "/home" : "/onboarding");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Login failed. Please try again.");
     } finally {
       setIsLoading(false);
     }

@@ -1,14 +1,28 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
+import { supabaseAdmin } from "../lib/supabase";
+import { generateYearPrayerTimes } from "../lib/prayerTimes";
 
 // ── Types ─────────────────────────────────────────────────────────────────
-interface PrayerTime { date: string; fajr: string; dhuhr: string; asr: string; maghrib: string; isha: string; }
+interface PrayerTime {
+  date: string; fajr: string; dhuhr: string; asr: string; maghrib: string; isha: string;
+  fajr_adhan?: string; fajr_iqama?: string;
+  dhuhr_adhan?: string; dhuhr_iqama?: string;
+  asr_adhan?: string; asr_iqama?: string;
+  maghrib_adhan?: string; maghrib_iqama?: string; maghrib_iqama_2?: string; maghrib_iqama_3?: string;
+  isha_adhan?: string; isha_iqama?: string;
+  fajr_iqama_2?: string; fajr_iqama_3?: string;
+  jummah_1?: string; jummah_2?: string; jummah_3?: string;
+}
 interface Event { id: number; title: string; description: string; date: string; time: string; }
 interface EventForm { title: string; description: string; date: string; time: string; }
 interface NotificationForm { type: string; title: string; message: string; }
 interface Question { id: number; name: string; email: string; question: string; date: string; answered: boolean; answer?: string; }
 interface Month { value: string; label: string; }
+interface BatchCell { mode: "offset" | "fixed"; offset: number; fixed: string; }
+interface BatchCell2 extends BatchCell { enabled: boolean; }
+interface BatchConfig { fajr: BatchCell; dhuhr: BatchCell; asr: BatchCell; maghrib: BatchCell; isha: BatchCell; }
 
 // ── Themes ────────────────────────────────────────────────────────────────
 const THEMES = {
@@ -155,6 +169,99 @@ const TIMEZONES = [
   "Australia/Sydney",
 ];
 
+// ── Module-level helpers ──────────────────────────────────────────────────
+function makeBatchCell(offset: number): BatchCell { return { mode: "offset", offset, fixed: "" }; }
+function makeDefaultBatchAdhan(): BatchConfig {
+  return { fajr: makeBatchCell(0), dhuhr: makeBatchCell(0), asr: makeBatchCell(0), maghrib: makeBatchCell(0), isha: makeBatchCell(0) };
+}
+function makeDefaultBatchIqama(): BatchConfig {
+  return { fajr: makeBatchCell(30), dhuhr: makeBatchCell(30), asr: makeBatchCell(30), maghrib: makeBatchCell(3), isha: makeBatchCell(30) };
+}
+function applyBatchCell(cell: BatchCell, base: string): string {
+  if (!base || base === "—") return "—";
+  if (cell.mode === "fixed" && cell.fixed) return formatTimeInput(cell.fixed);
+  return addMinsToTime(base, cell.offset);
+}
+function addDefaultAdhanIqama(row: { date: string; fajr: string; dhuhr: string; asr: string; maghrib: string; isha: string }): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const p of ["fajr", "dhuhr", "asr", "maghrib", "isha"] as const) {
+    const start = row[p] ?? "";
+    const adhan = start; // 0 min offset
+    out[`${p}_adhan`] = adhan;
+    out[`${p}_iqama`] = addMinsToTime(adhan, p === "maghrib" ? 3 : 30);
+  }
+  return out;
+}
+function addMinsToTime(timeStr: string, mins: number): string {
+  if (!timeStr || timeStr === "—") return "–";
+  let totalH: number, totalM: number;
+  const m24 = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+  if (m24) { totalH = parseInt(m24[1]); totalM = parseInt(m24[2]); }
+  else {
+    const match = timeStr.match(/^(\d+):(\d+)\s*(AM|PM)$/i);
+    if (!match) return timeStr;
+    let h = parseInt(match[1]);
+    const p = match[3].toUpperCase();
+    if (p === "PM" && h !== 12) h += 12;
+    if (p === "AM" && h === 12) h = 0;
+    totalH = h; totalM = parseInt(match[2]);
+  }
+  const total = totalH * 60 + totalM + mins;
+  const nh = Math.floor(total / 60) % 24, nm = total % 60;
+  const np = nh >= 12 ? "PM" : "AM";
+  const dh = nh === 0 ? 12 : nh > 12 ? nh - 12 : nh;
+  return `${dh}:${String(nm).padStart(2, "0")} ${np}`;
+}
+// ── Time helpers ──────────────────────────────────────────────────────────
+function to12h(timeStr: string): string {
+  if (!timeStr || timeStr === "—") return timeStr;
+  const m24 = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+  if (m24) {
+    let h = parseInt(m24[1]);
+    const min = m24[2];
+    const period = h >= 12 ? "PM" : "AM";
+    if (h === 0) h = 12;
+    else if (h > 12) h -= 12;
+    return `${h}:${min} ${period}`;
+  }
+  return timeStr;
+}
+
+function formatTimeInput(val: string): string {
+  const clean = val.trim();
+  if (!clean) return "";
+  // Already "h:mm AM/PM"
+  const mFull = clean.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (mFull) return `${parseInt(mFull[1])}:${mFull[2].padStart(2, "0")} ${mFull[3].toUpperCase()}`;
+  // "h:mmam" or "hhmm am/pm"
+  const mAmPm = clean.match(/^(\d{1,2}):?(\d{2})\s*(am|pm)$/i);
+  if (mAmPm) {
+    let h = parseInt(mAmPm[1]); const m = mAmPm[2]; const p = mAmPm[3].toUpperCase();
+    if (p === "PM" && h !== 12) h += 12;
+    if (p === "AM" && h === 12) h = 0;
+    const dh = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    return `${dh}:${m} ${h >= 12 ? "PM" : "AM"}`;
+  }
+  // "h:mm" 24h or ambiguous
+  const m24 = clean.match(/^(\d{1,2}):(\d{2})$/);
+  if (m24) {
+    const h = parseInt(m24[1]); const m = m24[2];
+    const period = h >= 12 ? "PM" : "AM";
+    const dh = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    return `${dh}:${m} ${period}`;
+  }
+  // Compact "630" or "0630"
+  const mCompact = clean.match(/^(\d{3,4})$/);
+  if (mCompact) {
+    const s = mCompact[1].padStart(4, "0");
+    const h = parseInt(s.slice(0, 2)); const m = s.slice(2);
+    const period = h >= 12 ? "PM" : "AM";
+    const dh = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    return `${dh}:${m} ${period}`;
+  }
+  return val;
+}
+
 // ── Dashboard Component ───────────────────────────────────────────────────
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -173,6 +280,8 @@ const Dashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>("overview");
   const [settingsTab, setSettingsTab] = useState<string>("general");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [animDone, setAnimDone] = useState(false);
   const [currentTime, setCurrentTime] = useState<Date>(new Date());
 
   const storedName = sessionStorage.getItem("masjid_name") || localStorage.getItem("masjid_name") || "Toronto Hifz Academy";
@@ -218,31 +327,40 @@ const Dashboard: React.FC = () => {
 
   // ── Prayer times state ────────────────────────────────────────────────
   const [prayerSource, setPrayerSource] = useState<"excel" | "backend">("backend");
-  const [selectedMonth, setSelectedMonth] = useState<string>("2026-03");
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [prayerTimesByMonth, setPrayerTimesByMonth] = useState<Record<string, PrayerTime[]>>({
-    "2026-03": [
-      { date: "2026-03-01", fajr: "5:47 AM", dhuhr: "12:29 PM", asr: "3:41 PM", maghrib: "5:58 PM", isha: "7:28 PM" },
-      { date: "2026-03-02", fajr: "5:45 AM", dhuhr: "12:29 PM", asr: "3:43 PM", maghrib: "6:00 PM", isha: "7:30 PM" },
-      { date: "2026-03-03", fajr: "5:43 AM", dhuhr: "12:28 PM", asr: "3:44 PM", maghrib: "6:01 PM", isha: "7:31 PM" },
-    ],
+  const [pendingSource, setPendingSource] = useState<"excel" | "backend" | null>(null);
+  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   });
+  const [switchLoading, setSwitchLoading] = useState(false);
+  const [prayerLoading, setPrayerLoading] = useState(true);
+  const [prayerTimesByMonth, setPrayerTimesByMonth] = useState<Record<string, PrayerTime[]>>({});
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState("");
   const [uploadError, setUploadError] = useState("");
-  const [prayerOffsets, setPrayerOffsets] = useState<Record<string, { adhan: number; iqama: number }>>({
-    fajr:    { adhan: 5,  iqama: 20 },
-    dhuhr:   { adhan: 5,  iqama: 15 },
-    asr:     { adhan: 5,  iqama: 15 },
-    maghrib: { adhan: 5,  iqama: 10 },
-    isha:    { adhan: 5,  iqama: 15 },
+  const defaultExtra = { fajr: [] as string[], maghrib: [] as string[], jummah: ["1:15 PM"] };
+  const [extraTimings, setExtraTimings] = useState<{ fajr: string[]; maghrib: string[]; jummah: string[] }>(defaultExtra);
+  // ── Jamaat settings ───────────────────────────────────────────────────
+  const [jamaatSettings, setJamaatSettings] = useState({ fajr2: false, fajr3: false, maghrib2: false, maghrib3: false });
+
+  // ── Batch update state ────────────────────────────────────────────────
+  const [batchFrom, setBatchFrom] = useState("");
+  const [batchTo, setBatchTo] = useState("");
+  const [batchAdhan, setBatchAdhan] = useState<BatchConfig>(makeDefaultBatchAdhan());
+  const [batchIqama, setBatchIqama] = useState<BatchConfig>(makeDefaultBatchIqama());
+  const [batchIqama2, setBatchIqama2] = useState<{ fajr: BatchCell2; maghrib: BatchCell2 }>({
+    fajr:    { mode: "fixed", offset: 0, fixed: "", enabled: false },
+    maghrib: { mode: "fixed", offset: 0, fixed: "", enabled: false },
   });
-  const [extraTimings, setExtraTimings] = useState<{ fajr: string[]; maghrib: string[]; jummah: string[] }>({
-    fajr: [],
-    maghrib: [],
-    jummah: ["1:15 PM"],
+  const [batchIqama3, setBatchIqama3] = useState<{ fajr: BatchCell2; maghrib: BatchCell2 }>({
+    fajr:    { mode: "fixed", offset: 0, fixed: "", enabled: false },
+    maghrib: { mode: "fixed", offset: 0, fixed: "", enabled: false },
   });
+  const [applyingBatch, setApplyingBatch] = useState(false);
+  const [batchApplied, setBatchApplied] = useState(false);
+  const [batchError, setBatchError] = useState("");
 
   // ── Events state ──────────────────────────────────────────────────────
   const [events, setEvents] = useState<Event[]>([
@@ -279,18 +397,24 @@ const Dashboard: React.FC = () => {
     notificationsSent: 89,
   };
 
-  const months: Month[] = [
-    { value: "2026-01", label: "January 2026" }, { value: "2026-02", label: "February 2026" },
-    { value: "2026-03", label: "March 2026" },   { value: "2026-04", label: "April 2026" },
-    { value: "2026-05", label: "May 2026" },     { value: "2026-06", label: "June 2026" },
-  ];
+  const months: Month[] = Array.from({ length: 12 }, (_, i) => {
+    const d = new Date(selectedYear, i, 1);
+    return {
+      value: `${selectedYear}-${String(i + 1).padStart(2, "0")}`,
+      label: d.toLocaleDateString("en-US", { month: "long", year: "numeric" }),
+    };
+  });
 
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayMonthKey = todayStr.slice(0, 7);
+  const todayRow = prayerTimesByMonth[todayMonthKey]?.find(r => r.date === todayStr);
+  const fmt = (t?: string) => t ? to12h(t) : "—";
   const todayPrayers = [
-    { name: "Fajr", time: "5:47 AM", arabic: "الفجر" },
-    { name: "Dhuhr", time: "12:29 PM", arabic: "الظهر" },
-    { name: "Asr", time: "3:41 PM", arabic: "العصر" },
-    { name: "Maghrib", time: "5:58 PM", arabic: "المغرب" },
-    { name: "Isha", time: "7:28 PM", arabic: "العشاء" },
+    { name: "Fajr",    time: fmt(todayRow?.fajr),    arabic: "الفجر" },
+    { name: "Dhuhr",   time: fmt(todayRow?.dhuhr),   arabic: "الظهر" },
+    { name: "Asr",     time: fmt(todayRow?.asr),     arabic: "العصر" },
+    { name: "Maghrib", time: fmt(todayRow?.maghrib), arabic: "المغرب" },
+    { name: "Isha",    time: fmt(todayRow?.isha),    arabic: "العشاء" },
   ];
 
   // ── Effects ───────────────────────────────────────────────────────────
@@ -304,6 +428,68 @@ const Dashboard: React.FC = () => {
     if (!token) navigate("/", { replace: true });
   }, []);
 
+  useEffect(() => {
+    const t1 = setTimeout(() => setMounted(true), 10);
+    const t2 = setTimeout(() => setAnimDone(true), 650); // after transition finishes
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, []);
+
+  // Lock body scroll when source-switch modal is open
+  useEffect(() => {
+    document.body.style.overflow = pendingSource ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [pendingSource]);
+
+  // ── Load prayer times from Supabase ───────────────────────────────────
+  useEffect(() => {
+    const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+    if (!masjidId) { setPrayerLoading(false); return; }
+
+    supabaseAdmin
+      .from("prayer_times")
+      .select("date,fajr,dhuhr,asr,maghrib,isha,fajr_adhan,fajr_iqama,fajr_iqama_2,fajr_iqama_3,dhuhr_adhan,dhuhr_iqama,asr_adhan,asr_iqama,maghrib_adhan,maghrib_iqama,maghrib_iqama_2,maghrib_iqama_3,isha_adhan,isha_iqama,jummah_1,jummah_2,jummah_3")
+      .eq("masjid_id", masjidId)
+      .gte("date", `${selectedYear}-01-01`)
+      .lte("date", `${selectedYear}-12-31`)
+      .order("date", { ascending: true })
+      .then(({ data, error }) => {
+        if (!error && data && data.length > 0) {
+          const grouped: Record<string, PrayerTime[]> = {};
+          const timeFields = ["fajr","dhuhr","asr","maghrib","isha","fajr_adhan","fajr_iqama","fajr_iqama_2","fajr_iqama_3","dhuhr_adhan","dhuhr_iqama","asr_adhan","asr_iqama","maghrib_adhan","maghrib_iqama","maghrib_iqama_2","maghrib_iqama_3","isha_adhan","isha_iqama","jummah_1","jummah_2","jummah_3"];
+          for (const row of data) {
+            const key = (row.date as string).slice(0, 7);
+            if (!grouped[key]) grouped[key] = [];
+            const normalized: Record<string, unknown> = { ...row };
+            for (const f of timeFields) {
+              if (normalized[f]) normalized[f] = to12h(normalized[f] as string);
+            }
+            grouped[key].push(normalized as unknown as PrayerTime);
+          }
+          setPrayerTimesByMonth(grouped);
+        }
+        setPrayerLoading(false);
+      });
+  }, [selectedYear]);
+
+  // ── Sync selectedMonth when year changes ──────────────────────────────
+  useEffect(() => {
+    setSelectedMonth(`${selectedYear}-${String(new Date().getMonth() + 1).padStart(2, "0")}`);
+  }, [selectedYear]);
+
+  // ── Load extra timings (jummah) from Supabase ─────────────────────────
+  useEffect(() => {
+    const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+    if (!masjidId) return;
+    supabaseAdmin
+      .from("prayer_settings")
+      .select("extra_timings")
+      .eq("masjid_id", masjidId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data?.extra_timings) setExtraTimings(data.extra_timings as typeof defaultExtra);
+      });
+  }, []);
+
   // ── Handlers ──────────────────────────────────────────────────────────
   const handleLogout = () => { localStorage.clear(); sessionStorage.clear(); navigate("/login"); };
 
@@ -312,6 +498,115 @@ const Dashboard: React.FC = () => {
     localStorage.setItem("masjid_name", generalSettings.masjidName);
     setSettingsSaved(true);
     setTimeout(() => setSettingsSaved(false), 3000);
+  };
+
+
+  const handleBatchApply = async () => {
+    const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+    if (!masjidId) { setBatchError("No masjid ID found."); return; }
+    if (!batchFrom || !batchTo) { setBatchError("Please select a date range."); return; }
+    if (batchFrom > batchTo) { setBatchError("Start date must be before end date."); return; }
+    setBatchError(""); setApplyingBatch(true);
+
+    const upsertRows: Record<string, string | null>[] = [];
+    for (const days of Object.values(prayerTimesByMonth)) {
+      for (const day of days) {
+        if (day.date < batchFrom || day.date > batchTo) continue;
+        const row: Record<string, string | null> = { masjid_id: masjidId, date: day.date };
+        for (const p of ["fajr", "dhuhr", "asr", "maghrib", "isha"] as const) {
+          const start = day[p] ?? "";
+          const aCell = (batchAdhan as unknown as Record<string, BatchCell>)[p];
+          const iCell = (batchIqama as unknown as Record<string, BatchCell>)[p];
+          const adhanTime = applyBatchCell(aCell, start);
+          row[`${p}_adhan`] = adhanTime;
+          row[`${p}_iqama`] = applyBatchCell(iCell, adhanTime);
+        }
+        // 2nd & 3rd jamaat for fajr and maghrib
+        row.fajr_iqama_2    = jamaatSettings.fajr2    ? applyBatchCell(batchIqama2.fajr,    row.fajr_iqama as string)    : null;
+        row.maghrib_iqama_2 = jamaatSettings.maghrib2 ? applyBatchCell(batchIqama2.maghrib, row.maghrib_iqama as string) : null;
+        row.fajr_iqama_3    = jamaatSettings.fajr3    ? applyBatchCell(batchIqama3.fajr,    row.fajr_iqama_2 as string ?? row.fajr_iqama as string)    : null;
+        row.maghrib_iqama_3 = jamaatSettings.maghrib3 ? applyBatchCell(batchIqama3.maghrib, row.maghrib_iqama_2 as string ?? row.maghrib_iqama as string) : null;
+        // Jummah times — only for Fridays
+        if (new Date(day.date + "T12:00:00").getDay() === 5) {
+          row.jummah_1 = extraTimings.jummah[0] || null;
+          row.jummah_2 = extraTimings.jummah[1] || null;
+          row.jummah_3 = extraTimings.jummah[2] || null;
+        }
+        upsertRows.push(row);
+      }
+    }
+
+    if (upsertRows.length === 0) { setBatchError("No loaded prayer times in that date range."); setApplyingBatch(false); return; }
+
+    for (let i = 0; i < upsertRows.length; i += 100) {
+      const { error } = await supabaseAdmin.from("prayer_times").upsert(upsertRows.slice(i, i + 100), { onConflict: "masjid_id,date" });
+      if (error) { setBatchError("Save failed: " + error.message); setApplyingBatch(false); return; }
+    }
+
+    // Update local state
+    setPrayerTimesByMonth(prev => {
+      const updated = { ...prev };
+      for (const [key, days] of Object.entries(prev)) {
+        updated[key] = days.map(day => {
+          const match = upsertRows.find(r => r.date === day.date);
+          return match ? { ...day, ...match } : day;
+        });
+      }
+      return updated;
+    });
+
+    setApplyingBatch(false); setBatchApplied(true);
+    setTimeout(() => setBatchApplied(false), 2500);
+  };
+
+  const handleConfirmSourceSwitch = async () => {
+    if (!pendingSource) return;
+    const newSource = pendingSource;
+    setPendingSource(null);
+    const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+
+    if (newSource === "excel") {
+      // Delete all prayer times from DB and clear state
+      if (masjidId) await supabaseAdmin.from("prayer_times").delete().eq("masjid_id", masjidId);
+      setPrayerTimesByMonth({});
+      setPrayerSource("excel");
+    } else {
+      // Switch to auto: regenerate full year from prayer settings
+      setPrayerSource("backend");
+      if (!masjidId) return;
+      setSwitchLoading(true);
+      setUploadError("");
+      try {
+        const geo = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(prayerSettings.city + ", " + prayerSettings.country)}&format=json&limit=1`,
+          { headers: { "Accept-Language": "en" } }
+        );
+        const geoData = await geo.json();
+        if (!geoData || geoData.length === 0) throw new Error("Could not geocode city. Update city/country in Settings.");
+        const lat = parseFloat(geoData[0].lat);
+        const lng = parseFloat(geoData[0].lon);
+        const year = new Date().getFullYear();
+        const times = generateYearPrayerTimes(lat, lng, prayerSettings.timezone, prayerSettings.method, year);
+        const rows = times.map(({ sunrise: _s, ...t }) => ({ masjid_id: masjidId, ...t, ...addDefaultAdhanIqama(t) }));
+        for (let i = 0; i < rows.length; i += 100) {
+          const { error } = await supabaseAdmin.from("prayer_times").upsert(rows.slice(i, i + 100), { onConflict: "masjid_id,date" });
+          if (error) throw new Error(error.message);
+        }
+        const grouped: Record<string, PrayerTime[]> = {};
+        for (const { sunrise: _s, ...row } of times) {
+          const key = row.date.slice(0, 7);
+          if (!grouped[key]) grouped[key] = [];
+          grouped[key].push({ ...row, ...addDefaultAdhanIqama(row) } as PrayerTime);
+        }
+        setPrayerTimesByMonth(grouped);
+        setUploadSuccess(`Prayer times auto-calculated for all of ${year}.`);
+        setTimeout(() => setUploadSuccess(""), 4000);
+      } catch (err) {
+        setUploadError("Failed to regenerate: " + (err as Error).message);
+      } finally {
+        setSwitchLoading(false);
+      }
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -327,48 +622,110 @@ const Dashboard: React.FC = () => {
     setIsUploading(true); setUploadError(""); setUploadSuccess("");
     try {
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = async (e) => {
         try {
           const data = e.target?.result;
           const workbook = XLSX.read(data, { type: "binary" });
           const ws = workbook.Sheets[workbook.SheetNames[0]];
-          const jsonData = XLSX.utils.sheet_to_json(ws) as Record<string, string>[];
-          if (jsonData.length === 0) { setUploadError("Excel file is empty"); setIsUploading(false); return; }
-          const required = ["Date", "Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"];
-          const hasAll = required.every((col) => Object.keys(jsonData[0]).some((k) => k.toLowerCase().includes(col.toLowerCase())));
-          if (!hasAll) { setUploadError("Excel must have columns: Date, Fajr, Dhuhr, Asr, Maghrib, Isha"); setIsUploading(false); return; }
-          const get = (row: Record<string, string>, col: string) => Object.keys(row).find((k) => k.toLowerCase().includes(col.toLowerCase())) || col;
-          const parsed: PrayerTime[] = jsonData.map((row) => ({
-            date: row[get(row, "date")], fajr: row[get(row, "fajr")], dhuhr: row[get(row, "dhuhr")],
-            asr: row[get(row, "asr")], maghrib: row[get(row, "maghrib")], isha: row[get(row, "isha")],
-          }));
-          setPrayerTimesByMonth((prev) => ({ ...prev, [selectedMonth]: parsed }));
-          setUploadSuccess(`Uploaded ${parsed.length} days for ${months.find((m) => m.value === selectedMonth)?.label}!`);
+
+          // Read raw rows to skip possible title row
+          const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1 }) as string[][];
+          // Find the header row (first row containing "Fajr" or "fajr")
+          const headerRowIdx = rawRows.findIndex(r => r.some(c => String(c).toLowerCase().includes("fajr")));
+          if (headerRowIdx === -1) { setUploadError("Could not find headers. Need a Fajr column."); setIsUploading(false); return; }
+          const headers = rawRows[headerRowIdx].map(h => String(h ?? ""));
+          const dataRows = rawRows.slice(headerRowIdx + 1).filter(r => r.some(c => c !== "" && c != null));
+
+          const col = (name: string) => headers.findIndex(h => h.toLowerCase().includes(name.toLowerCase()));
+
+          // Detect IST-style format: has "Begins" or "Day" column
+          const isISTFormat = headers.some(h => h.toLowerCase().includes("begins")) || headers.some(h => h.toLowerCase() === "day");
+
+          const parsed: PrayerTime[] = [];
+
+          if (isISTFormat) {
+            // IST format: Day | Fajr Begins | Fajr Iqama | Sunrise | Zuhr Begins | Zuhr Iqama | Asr Begins | Asr Iqama | Sunset | Isha Begins | Isha Iqama | Jumah...
+            const iDay     = col("day");
+            const iFajrB   = col("fajr begins");
+            const iZuhrB   = headers.findIndex(h => (h.toLowerCase().includes("zuhr") || h.toLowerCase().includes("dhuhr")) && h.toLowerCase().includes("begins"));
+            const iAsrB    = col("asr begins");
+            const iSunset  = col("sunset");
+            const iIshaB   = col("isha begins");
+
+            // Jummah columns
+            const jummahCols = headers.map((h, i) => h.toLowerCase().includes("jumah") || h.toLowerCase().includes("jummah") ? i : -1).filter(i => i !== -1);
+
+            for (const row of dataRows) {
+              const dayNum = parseInt(String(row[iDay] ?? ""));
+              if (!dayNum || isNaN(dayNum)) continue;
+              const dateStr = `${selectedMonth}-${String(dayNum).padStart(2, "0")}`;
+              parsed.push({
+                date:    dateStr,
+                fajr:    String(row[iFajrB]  ?? ""),
+                dhuhr:   String(row[iZuhrB]  ?? ""),
+                asr:     String(row[iAsrB]   ?? ""),
+                maghrib: String(row[iSunset] ?? ""),
+                isha:    String(row[iIshaB]  ?? ""),
+              });
+            }
+
+            // Auto-set fixed iqama times from first data row into iqama schedule
+            if (dataRows.length > 0) {
+              const r = dataRows[0];
+              // Auto-set Jummah times
+              if (jummahCols.length > 0) {
+                const jTimes = jummahCols.map(ci => String(r[ci] ?? "")).filter(Boolean);
+                if (jTimes.length > 0) setExtraTimings(prev => ({ ...prev, jummah: jTimes }));
+              }
+            }
+          } else {
+            // Generic format: Date | Fajr | Dhuhr | Asr | Maghrib | Isha
+            const required = ["date", "fajr", "dhuhr", "asr", "maghrib", "isha"];
+            const missing = required.filter(r => col(r) === -1);
+            if (missing.length > 0) { setUploadError(`Missing columns: ${missing.join(", ")}`); setIsUploading(false); return; }
+            for (const row of dataRows) {
+              parsed.push({
+                date:    String(row[col("date")]    ?? ""),
+                fajr:    String(row[col("fajr")]    ?? ""),
+                dhuhr:   String(row[col("dhuhr")]   ?? ""),
+                asr:     String(row[col("asr")]     ?? ""),
+                maghrib: String(row[col("maghrib")] ?? ""),
+                isha:    String(row[col("isha")]    ?? ""),
+              });
+            }
+          }
+
+          if (parsed.length === 0) { setUploadError("No data rows found."); setIsUploading(false); return; }
+
+          // Add default adhan/iqama to each parsed row
+          const parsedWithDefaults = parsed.map(row => ({ ...row, ...addDefaultAdhanIqama(row) }));
+
+          const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+          if (masjidId) {
+            const dbRows = parsedWithDefaults.map(row => ({ masjid_id: masjidId, ...row }));
+            for (let i = 0; i < dbRows.length; i += 100) {
+              await supabaseAdmin.from("prayer_times").upsert(dbRows.slice(i, i + 100), { onConflict: "masjid_id,date" });
+            }
+          }
+
+          const grouped: Record<string, PrayerTime[]> = {};
+          for (const row of parsedWithDefaults) {
+            const key = row.date?.slice(0, 7);
+            if (key) { if (!grouped[key]) grouped[key] = []; grouped[key].push(row as PrayerTime); }
+          }
+          setPrayerTimesByMonth(prev => ({ ...prev, ...grouped }));
+
+          const fmtD = (d: string) => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+          const firstDate = parsed[0]?.date;
+          const lastDate  = parsed[parsed.length - 1]?.date;
+          setUploadSuccess(`${parsed.length} days uploaded · ${fmtD(firstDate)} – ${fmtD(lastDate)} · defaults applied`);
           setUploadFile(null);
-        } catch { setUploadError("Failed to parse Excel file."); }
+        } catch (err) { setUploadError("Failed to parse: " + (err as Error).message); }
         finally { setIsUploading(false); }
       };
       reader.onerror = () => { setUploadError("Failed to read file"); setIsUploading(false); };
       reader.readAsBinaryString(uploadFile);
     } catch { setUploadError("Upload failed."); setIsUploading(false); }
-  };
-
-  const addMinsToTime = (timeStr: string, mins: number): string => {
-    if (!timeStr) return "–";
-    if (!mins) return timeStr;
-    const match = timeStr.match(/^(\d+):(\d+)\s*(AM|PM)$/i);
-    if (!match) return timeStr;
-    let h = parseInt(match[1]);
-    const m = parseInt(match[2]);
-    const period = match[3].toUpperCase();
-    if (period === "PM" && h !== 12) h += 12;
-    if (period === "AM" && h === 12) h = 0;
-    const total = h * 60 + m + mins;
-    const nh = Math.floor(total / 60) % 24;
-    const nm = total % 60;
-    const np = nh >= 12 ? "PM" : "AM";
-    const dh = nh === 0 ? 12 : nh > 12 ? nh - 12 : nh;
-    return `${dh}:${String(nm).padStart(2, "0")} ${np}`;
   };
 
   const handleEditStartTime = (dayIdx: number, field: keyof PrayerTime, value: string) => {
@@ -380,32 +737,42 @@ const Dashboard: React.FC = () => {
     }));
   };
 
-  const handleGenerateFromBackend = async () => {
-    setIsGenerating(true);
-    // Simulate a backend call
-    await new Promise((r) => setTimeout(r, 1800));
-    const days = new Date(parseInt(selectedMonth.split("-")[0]), parseInt(selectedMonth.split("-")[1]), 0).getDate();
-    const generated: PrayerTime[] = Array.from({ length: days }, (_, i) => {
-      const dayNum = i + 1;
-      const pad = (n: number) => String(n).padStart(2, "0");
-      const fajrH = 5, fajrM = 47 - Math.floor(dayNum * 0.5);
-      const maghribH = 17, maghribM = 58 + Math.floor(dayNum * 0.7);
-      const mH = maghribM >= 60 ? maghribH + 1 : maghribH;
-      const mM = maghribM >= 60 ? maghribM - 60 : maghribM;
-      return {
-        date: `${selectedMonth}-${pad(dayNum)}`,
-        fajr: `${fajrH}:${pad(Math.max(fajrM, 30))} AM`,
-        dhuhr: `12:29 PM`,
-        asr: `3:${pad(41 + Math.floor(dayNum * 0.3))} PM`,
-        maghrib: `${mH % 12 || 12}:${pad(mM)} PM`,
-        isha: `7:${pad(28 + Math.floor(dayNum * 0.2))} PM`,
-      };
-    });
-    setPrayerTimesByMonth((prev) => ({ ...prev, [selectedMonth]: generated }));
-    setIsGenerating(false);
-    setUploadSuccess(`Generated ${days} days of prayer times for ${months.find((m) => m.value === selectedMonth)?.label} using ${prayerSettings.method} method.`);
-    setTimeout(() => setUploadSuccess(""), 5000);
+  const [savingSchedule, setSavingSchedule] = useState(false);
+  const [savedSchedule, setSavedSchedule] = useState(false);
+  const [scheduleEdited, setScheduleEdited] = useState(false);
+
+  const handleEditCell = (date: string, field: string, value: string) => {
+    const monthKey = date.slice(0, 7);
+    setPrayerTimesByMonth(prev => ({
+      ...prev,
+      [monthKey]: prev[monthKey].map(d => d.date === date ? { ...d, [field]: value } : d),
+    }));
+    setScheduleEdited(true);
   };
+
+  const handleFormatCell = (date: string, field: string, value: string) => {
+    const formatted = formatTimeInput(value);
+    if (formatted !== value) {
+      const monthKey = date.slice(0, 7);
+      setPrayerTimesByMonth(prev => ({
+        ...prev,
+        [monthKey]: prev[monthKey].map(d => d.date === date ? { ...d, [field]: formatted } : d),
+      }));
+    }
+  };
+
+  const handleSaveSchedule = async () => {
+    const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+    if (!masjidId) return;
+    setSavingSchedule(true);
+    const rows = (prayerTimesByMonth[selectedMonth] || []).map(day => ({ masjid_id: masjidId, ...day }));
+    for (let i = 0; i < rows.length; i += 100) {
+      await supabaseAdmin.from("prayer_times").upsert(rows.slice(i, i + 100), { onConflict: "masjid_id,date" });
+    }
+    setSavingSchedule(false); setSavedSchedule(true); setScheduleEdited(false);
+    setTimeout(() => setSavedSchedule(false), 2500);
+  };
+
 
   const handleEventSubmit = () => {
     if (!eventForm.title || !eventForm.date || !eventForm.time) { alert("Fill in all required fields"); return; }
@@ -445,7 +812,11 @@ const Dashboard: React.FC = () => {
 
   // ─────────────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-zinc-950 text-white">
+    <div className="min-h-screen bg-zinc-950 text-white" style={animDone ? { opacity: 1 } : {
+      opacity:    mounted ? 1 : 0,
+      transform:  mounted ? "scale(1) translateY(0)" : "scale(1.015) translateY(16px)",
+      transition: "opacity 0.55s cubic-bezier(0.4,0,0.2,1), transform 0.55s cubic-bezier(0.4,0,0.2,1)",
+    }}>
 
       {/* ── Navigation ── */}
       <nav className={`fixed top-0 w-full bg-zinc-950/95 backdrop-blur-xl border-b ${theme.navBorder} z-50 py-4`}>
@@ -642,187 +1013,365 @@ const Dashboard: React.FC = () => {
           <div className="px-8 py-10">
 
             {/* ── Header ── */}
-            <div className="flex items-center justify-between mb-8">
+            <div className="flex items-end justify-between mb-8">
               <div>
                 <div className={`text-xs font-bold uppercase tracking-widest mb-2 ${theme.label}`}>Management</div>
                 <h1 className="text-4xl font-black">Prayer Times</h1>
               </div>
-              {/* Source pill toggle */}
-              <div className="flex bg-zinc-800/70 rounded-xl p-1 border border-white/5">
-                {[
-                  { k: "backend", label: "Auto-calculate", icon: "M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" },
-                  { k: "excel",   label: "Upload Excel",   icon: "M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" },
-                ].map((opt) => (
-                  <button key={opt.k} onClick={() => setPrayerSource(opt.k as "excel" | "backend")}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-black transition-all ${
-                      prayerSource === opt.k ? `bg-zinc-950 ${theme.accent} shadow` : "text-zinc-500 hover:text-zinc-300"
+              <div className="flex items-center bg-zinc-900/60 border border-white/8 rounded-xl p-1 gap-1 mb-1">
+                {([{ k: "backend" as const, label: "Auto-calculate" }, { k: "excel" as const, label: "Upload Excel" }]).map(opt => (
+                  <button key={opt.k}
+                    onClick={() => opt.k !== prayerSource && setPendingSource(opt.k)}
+                    className={`px-4 py-2 rounded-lg text-sm font-black transition-all ${
+                      prayerSource === opt.k ? `${theme.accentBg} ${theme.accent}` : "text-zinc-500 hover:text-white"
                     }`}>
-                    <Icon d={opt.icon} className="w-3.5 h-3.5" />
                     {opt.label}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* ── Prayer cards (start + adhan + iqama per prayer) ── */}
-            <div className="grid grid-cols-5 gap-4 mb-8">
-              {PRAYER_META.map((p) => {
-                const startTime = sampleDay ? String((sampleDay as unknown as Record<string,string>)[p.key]) : null;
-                const offsets   = prayerOffsets[p.key];
-                return (
-                  <div key={p.key} className="rounded-2xl p-5 border-2 bg-zinc-900/60 border-white/5 transition-all">
-                    {/* Prayer name */}
-                    <div className="mb-4">
-                      <div className="text-lg font-black mb-0.5 text-white">{p.label}</div>
-                      <div className={`text-sm ${theme.accent}`}>{p.arabic}</div>
-                    </div>
-
-                    {/* Start time */}
-                    <div className="mb-4">
-                      <div className="text-xs font-black uppercase tracking-widest mb-1 text-zinc-600">Start</div>
-                      <div className="text-2xl font-black tabular-nums text-white">
-                        {startTime ?? <span className="text-zinc-600 text-base">—</span>}
+            {/* ── Today's Prayer Times ── */}
+            {(() => {
+              return (
+                <div className="rounded-2xl bg-zinc-900/60 border border-white/5 mb-5 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between">
+                    <div>
+                      <div className={`text-xs font-bold uppercase tracking-widest mb-0.5 ${theme.label}`}>Today</div>
+                      <div className="text-base font-black text-white">
+                        {new Date().toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
                       </div>
-                      {prayerSource === "backend" && startTime && (
-                        <div className="text-xs mt-0.5 text-zinc-600">auto-calculated</div>
-                      )}
                     </div>
-
-                    {/* Adhan row */}
-                    <div className="rounded-xl p-3 mb-2 bg-zinc-800/50">
-                      <div className="text-xs font-black uppercase tracking-widest mb-2 text-zinc-500">Adhan</div>
-                      <div className="flex items-center gap-1.5 mb-1.5">
-                        <button
-                          onClick={() => setPrayerOffsets(prev => ({ ...prev, [p.key]: { ...prev[p.key], adhan: Math.max(0, prev[p.key].adhan - 1) } }))}
-                          className="w-6 h-6 rounded-md flex items-center justify-center text-sm font-black transition-all bg-zinc-700 hover:bg-zinc-600 text-zinc-300">−</button>
-                        <span className="text-sm font-black w-10 text-center tabular-nums text-zinc-200">+{offsets.adhan}m</span>
-                        <button
-                          onClick={() => setPrayerOffsets(prev => ({ ...prev, [p.key]: { ...prev[p.key], adhan: prev[p.key].adhan + 1 } }))}
-                          className="w-6 h-6 rounded-md flex items-center justify-center text-sm font-black transition-all bg-zinc-700 hover:bg-zinc-600 text-zinc-300">+</button>
-                      </div>
-                      {startTime
-                        ? <div className={`text-sm font-bold ${theme.accent}`}>{addMinsToTime(startTime, offsets.adhan)}</div>
-                        : <div className="text-sm text-zinc-600">—</div>
-                      }
+                    <div className="text-xs text-zinc-600 font-bold">
+                      {todayRow ? "" : "No times loaded"}
                     </div>
-
-                    {/* Iqama row */}
-                    <div className="rounded-xl p-3 bg-zinc-800/50">
-                      <div className="text-xs font-black uppercase tracking-widest mb-2 text-zinc-500">Iqama</div>
-                      <div className="flex items-center gap-1.5 mb-1.5">
-                        <button
-                          onClick={() => setPrayerOffsets(prev => ({ ...prev, [p.key]: { ...prev[p.key], iqama: Math.max(0, prev[p.key].iqama - 1) } }))}
-                          className="w-6 h-6 rounded-md flex items-center justify-center text-sm font-black transition-all bg-zinc-700 hover:bg-zinc-600 text-zinc-300">−</button>
-                        <span className="text-sm font-black w-10 text-center tabular-nums text-zinc-200">+{offsets.iqama}m</span>
-                        <button
-                          onClick={() => setPrayerOffsets(prev => ({ ...prev, [p.key]: { ...prev[p.key], iqama: prev[p.key].iqama + 1 } }))}
-                          className="w-6 h-6 rounded-md flex items-center justify-center text-sm font-black transition-all bg-zinc-700 hover:bg-zinc-600 text-zinc-300">+</button>
-                      </div>
-                      {startTime
-                        ? <div className={`text-sm font-bold ${theme.accent}`}>{addMinsToTime(startTime, offsets.iqama)}</div>
-                        : <div className="text-sm text-zinc-600">—</div>
-                      }
-                    </div>
-
-                    {/* Extra congregation times for Fajr / Maghrib */}
-                    {(p.key === "fajr" || p.key === "maghrib") && (() => {
-                      const key = p.key as "fajr" | "maghrib";
-                      const times = extraTimings[key];
+                  </div>
+                  <div className="p-5 grid grid-cols-5 gap-3">
+                    {PRAYER_META.map((p) => {
+                      const row = todayRow as unknown as Record<string,string> | undefined;
+                      const adhanT = row ? (row[`${p.key}_adhan`] || row[p.key] || "—") : "—";
+                      const iqamaT = row ? (row[`${p.key}_iqama`] || "—") : "—";
                       return (
-                        <div className="mt-3 border-t border-white/5 pt-3">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="text-xs font-black uppercase tracking-widest text-zinc-500">Extra Times</div>
-                            {times.length < 3 && (
-                              <button
-                                onClick={() => setExtraTimings(prev => ({ ...prev, [key]: [...prev[key], ""] }))}
-                                className={`text-xs font-black px-2 py-0.5 rounded-lg ${theme.subtleBtn}`}
-                              >+ Add</button>
-                            )}
-                          </div>
-                          {times.length === 0 && (
-                            <div className="text-xs text-zinc-700 italic">No extra times</div>
-                          )}
-                          {times.map((t, i) => (
-                            <div key={i} className="flex items-center gap-1.5 mb-1.5">
-                              <div className="text-xs text-zinc-600 w-14 shrink-0 font-bold">{p.label} {i + 2}</div>
-                              <input
-                                type="text"
-                                value={t}
-                                onChange={e => {
-                                  const updated = [...times];
-                                  updated[i] = e.target.value;
-                                  setExtraTimings(prev => ({ ...prev, [key]: updated }));
-                                }}
-                                placeholder="6:30 AM"
-                                className="flex-1 bg-zinc-800 border border-white/10 rounded-lg px-2 py-1 text-xs text-white font-bold focus:outline-none focus:border-white/20 min-w-0"
-                              />
-                              <button
-                                onClick={() => setExtraTimings(prev => ({ ...prev, [key]: prev[key].filter((_, j) => j !== i) }))}
-                                className="text-zinc-600 hover:text-rose-400 text-sm font-black transition-colors leading-none"
-                              >×</button>
+                        <div key={p.key} className="relative bg-zinc-800/60 border border-white/5 rounded-2xl overflow-hidden flex flex-col">
+                          {/* Header */}
+                          <div className="flex flex-col items-center pt-5 pb-4 px-4 border-b border-white/5">
+                            <div className={`text-xl mb-1`} style={{ fontFamily: "serif", color: "inherit" }}>
+                              <span className={theme.accent}>{p.arabic}</span>
                             </div>
-                          ))}
+                            <div className="font-black text-white text-2xl tracking-tight">{p.label}</div>
+                          </div>
+                          {/* Times */}
+                          <div className="grid grid-cols-2 divide-x divide-white/5 flex-1">
+                            {[
+                              { label: "Adhan", val: to12h(adhanT) },
+                              { label: "Iqama", val: to12h(iqamaT) },
+                            ].map(({ label, val }) => (
+                              <div key={label} className="flex flex-col items-center justify-center py-5 px-2">
+                                <div className="text-[9px] font-black uppercase tracking-widest text-zinc-600 mb-2">{label}</div>
+                                <div className={`text-xl font-black tabular-nums text-center ${theme.accent}`}>{val}</div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       );
-                    })()}
+                    })}
                   </div>
-                );
-              })}
-            </div>
+                </div>
+              );
+            })()}
 
-            {/* ── Jummah Timings ── */}
-            <div className="rounded-2xl p-5 border-2 bg-zinc-900/60 border-white/5 mb-8">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <div className="text-lg font-black text-white mb-0.5">Jummah</div>
-                  <div className={`text-sm ${theme.accent}`}>الجمعة</div>
-                </div>
-                {extraTimings.jummah.length < 3 && (
-                  <button
-                    onClick={() => setExtraTimings(prev => ({ ...prev, jummah: [...prev.jummah, ""] }))}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm font-black ${theme.subtleBtn}`}
-                  >+ Add Jummah</button>
-                )}
-              </div>
-              {extraTimings.jummah.length === 0 ? (
-                <div className="text-sm text-zinc-600 italic">No Jummah times set. Click "Add Jummah" to get started.</div>
-              ) : (
-                <div className="grid grid-cols-3 gap-4">
-                  {extraTimings.jummah.map((t, i) => (
-                    <div key={i} className="bg-zinc-800/50 rounded-xl p-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="text-xs font-black uppercase tracking-widest text-zinc-500">Jummah {i + 1}</div>
-                        <button
-                          onClick={() => setExtraTimings(prev => ({ ...prev, jummah: prev.jummah.filter((_, j) => j !== i) }))}
-                          className="text-zinc-600 hover:text-rose-400 text-sm font-black transition-colors leading-none"
-                        >×</button>
-                      </div>
-                      <input
-                        type="text"
-                        value={t}
-                        onChange={e => {
-                          const updated = [...extraTimings.jummah];
-                          updated[i] = e.target.value;
-                          setExtraTimings(prev => ({ ...prev, jummah: updated }));
-                        }}
-                        placeholder="1:15 PM"
-                        className="w-full bg-zinc-900/60 border border-white/10 rounded-lg px-3 py-2 text-xl font-black text-white focus:outline-none focus:border-white/20"
-                      />
+            {/* ── Adhan & Iqama Schedule ── */}
+            {(() => {
+              const renderControl = (cell: BatchCell, onUpdate: (p: Partial<BatchCell>) => void, placeholder = "6:00 AM") => (
+                <div className="space-y-1.5">
+                  <div className="flex rounded-md overflow-hidden border border-white/8 w-fit text-[10px] font-black">
+                    {([{ v: "offset", label: "+Min" }, { v: "fixed", label: "Fixed" }] as const).map(m => (
+                      <button key={m.v} onClick={() => onUpdate({ mode: m.v })}
+                        className={`px-2 py-0.5 transition-all ${cell.mode === m.v ? `${theme.accentBg} ${theme.accent}` : "text-zinc-600 hover:text-zinc-300 bg-zinc-800/60"}`}>
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                  {cell.mode === "offset" ? (
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => onUpdate({ offset: Math.max(0, cell.offset - 1) })}
+                        className="w-5 h-5 rounded flex items-center justify-center text-xs font-black bg-zinc-800 hover:bg-zinc-700 text-zinc-400 border border-white/8">−</button>
+                      <span className="text-sm font-black w-11 text-center tabular-nums text-white">+{cell.offset}m</span>
+                      <button onClick={() => onUpdate({ offset: cell.offset + 1 })}
+                        className="w-5 h-5 rounded flex items-center justify-center text-xs font-black bg-zinc-800 hover:bg-zinc-700 text-zinc-400 border border-white/8">+</button>
                     </div>
-                  ))}
+                  ) : (
+                    <input value={cell.fixed} onChange={e => onUpdate({ fixed: e.target.value })}
+                      onBlur={e => onUpdate({ fixed: formatTimeInput(e.target.value) })}
+                      placeholder={placeholder}
+                      className="w-24 bg-zinc-800/60 border border-white/10 rounded-md px-2 py-1 text-sm font-bold text-white focus:outline-none focus:border-white/30" />
+                  )}
                 </div>
-              )}
-            </div>
+              );
+
+              const renderJamaat2or3 = (
+                cell: BatchCell2,
+                _onToggle: () => void,
+                onUpdate: (p: Partial<BatchCell>) => void,
+                _label: string,
+                placeholder: string
+              ) => renderControl(cell, onUpdate, placeholder);
+
+              return (
+                <div className="rounded-2xl bg-zinc-900/60 border border-white/5 mb-8 overflow-hidden">
+
+                  {/* ── Header ── */}
+                  <div className="px-7 py-5 border-b border-white/5">
+                    <div className="flex items-start justify-between gap-6">
+                      <div>
+                        <h2 className="text-xl font-black text-white">Adhan &amp; Iqama</h2>
+                        <p className="text-xs text-zinc-500 font-bold mt-1">Set offsets or fixed times per prayer, then apply to a date range</p>
+                      </div>
+                      {/* Date range + Apply */}
+                      <div className="flex flex-col items-end gap-2 shrink-0">
+                        <div className="flex items-center gap-2">
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[9px] font-black uppercase tracking-widest text-zinc-600 text-right">From</span>
+                            <div className="bg-zinc-800/80 border border-white/8 rounded-xl px-3 py-2">
+                              <input type="date" value={batchFrom} onChange={e => setBatchFrom(e.target.value)}
+                                className="bg-transparent text-sm font-bold text-white focus:outline-none" />
+                            </div>
+                          </div>
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[9px] font-black uppercase tracking-widest text-zinc-600 text-right">To</span>
+                            <div className="bg-zinc-800/80 border border-white/8 rounded-xl px-3 py-2">
+                              <input type="date" value={batchTo} onChange={e => setBatchTo(e.target.value)}
+                                className="bg-transparent text-sm font-bold text-white focus:outline-none" />
+                            </div>
+                          </div>
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[9px] font-black uppercase tracking-widest text-zinc-600 opacity-0">Btn</span>
+                            <button onClick={handleBatchApply} disabled={applyingBatch}
+                              className={`flex items-center gap-2 px-5 py-2 rounded-xl font-black text-sm transition-all h-[38px] ${
+                                batchApplied ? "bg-emerald-500/20 border border-emerald-500/40 text-emerald-400"
+                                  : applyingBatch ? "bg-zinc-800 text-zinc-500 cursor-wait border border-white/5"
+                                  : `${theme.btn}`
+                              }`}>
+                              {applyingBatch
+                                ? <><svg className="animate-spin w-4 h-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> Applying…</>
+                                : batchApplied ? <><Icon d="M5 13l4 4L19 7" className="w-4 h-4" /> Applied</>
+                                : "Apply"
+                              }
+                            </button>
+                          </div>
+                        </div>
+                        {batchError && (
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-red-400">
+                            <Icon d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" className="w-3.5 h-3.5 shrink-0" />
+                            {batchError}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── Column headers ── */}
+                  <div className="grid grid-cols-[120px_1fr_1fr_1fr_1fr_1fr] border-b border-white/5 bg-zinc-950/30">
+                    <div className="px-5 py-2.5" />
+                    {PRAYER_META.map(p => (
+                      <div key={p.key} className="px-5 py-2.5 border-l border-white/5 flex items-center gap-2">
+                        <span className="font-black text-white text-sm">{p.label}</span>
+                        <span className={`text-xs ${theme.accent}`} style={{ fontFamily: "serif" }}>{p.arabic}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── Adhan row ── */}
+                  <div className="grid grid-cols-[120px_1fr_1fr_1fr_1fr_1fr] border-b border-white/5">
+                    <div className="px-5 py-4 flex items-center">
+                      <span className="text-xs font-black uppercase tracking-widest text-zinc-500">Adhan</span>
+                    </div>
+                    {PRAYER_META.map(p => (
+                      <div key={p.key} className="px-5 py-4 border-l border-white/5">
+                        {renderControl(
+                          (batchAdhan as unknown as Record<string, BatchCell>)[p.key],
+                          patch => setBatchAdhan(prev => ({ ...prev, [p.key]: { ...(prev as unknown as Record<string, BatchCell>)[p.key], ...patch } })),
+                          "6:00 AM"
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── Iqama row ── */}
+                  <div className="grid grid-cols-[120px_1fr_1fr_1fr_1fr_1fr] border-b border-white/5">
+                    <div className="px-5 py-4 flex items-center">
+                      <span className="text-xs font-black uppercase tracking-widest text-zinc-500">Iqama</span>
+                    </div>
+                    {PRAYER_META.map(p => (
+                      <div key={p.key} className="px-5 py-4 border-l border-white/5">
+                        {renderControl(
+                          (batchIqama as unknown as Record<string, BatchCell>)[p.key],
+                          patch => setBatchIqama(prev => ({ ...prev, [p.key]: { ...(prev as unknown as Record<string, BatchCell>)[p.key], ...patch } })),
+                          "6:30 AM"
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── 2nd Jamaat row (fajr + maghrib only) ── */}
+                  {(jamaatSettings.fajr2 || jamaatSettings.maghrib2) && (
+                    <div className="grid grid-cols-[120px_1fr_1fr_1fr_1fr_1fr] border-b border-white/5">
+                      <div className="px-5 py-4 flex items-center">
+                        <span className="text-xs font-black uppercase tracking-widest text-zinc-500">2nd Jamaat</span>
+                      </div>
+                      {PRAYER_META.map(p => {
+                        const show = (p.key === "fajr" && jamaatSettings.fajr2) || (p.key === "maghrib" && jamaatSettings.maghrib2);
+                        const k = p.key as "fajr" | "maghrib";
+                        return (
+                          <div key={p.key} className="px-5 py-4 border-l border-white/5">
+                            {show ? renderJamaat2or3(
+                              batchIqama2[k],
+                              () => setBatchIqama2(prev => ({ ...prev, [k]: { ...prev[k], enabled: !prev[k].enabled } })),
+                              patch => setBatchIqama2(prev => ({ ...prev, [k]: { ...prev[k], ...patch } })),
+                              "", "7:00 AM"
+                            ) : <span className="text-zinc-700 text-xs">—</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* ── 3rd Jamaat row (fajr + maghrib only) ── */}
+                  {(jamaatSettings.fajr3 || jamaatSettings.maghrib3) && (
+                    <div className="grid grid-cols-[120px_1fr_1fr_1fr_1fr_1fr] border-b border-white/5">
+                      <div className="px-5 py-4 flex items-center">
+                        <span className="text-xs font-black uppercase tracking-widest text-zinc-500">3rd Jamaat</span>
+                      </div>
+                      {PRAYER_META.map(p => {
+                        const show = (p.key === "fajr" && jamaatSettings.fajr3) || (p.key === "maghrib" && jamaatSettings.maghrib3);
+                        const k = p.key as "fajr" | "maghrib";
+                        return (
+                          <div key={p.key} className="px-5 py-4 border-l border-white/5">
+                            {show ? renderJamaat2or3(
+                              batchIqama3[k],
+                              () => setBatchIqama3(prev => ({ ...prev, [k]: { ...prev[k], enabled: !prev[k].enabled } })),
+                              patch => setBatchIqama3(prev => ({ ...prev, [k]: { ...prev[k], ...patch } })),
+                              "", "7:30 AM"
+                            ) : <span className="text-zinc-700 text-xs">—</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* ── Jummah ── */}
+                  <div className="px-7 py-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <span className="text-xs font-black uppercase tracking-widest text-zinc-500">Jummah</span>
+                        <span className={`ml-2 text-sm ${theme.accent}`} style={{ fontFamily: "serif" }}>الجمعة</span>
+                        <p className="text-[10px] text-zinc-600 font-bold mt-0.5">Applied to Fridays in the selected date range</p>
+                      </div>
+                      {extraTimings.jummah.length < 3 && (
+                        <button onClick={() => setExtraTimings(prev => ({ ...prev, jummah: [...prev.jummah, ""] }))}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-black ${theme.subtleBtn}`}>+ Add Khutbah</button>
+                      )}
+                    </div>
+                    {extraTimings.jummah.length === 0 ? (
+                      <div className="text-xs text-zinc-600 font-bold py-4 text-center border border-dashed border-white/8 rounded-xl">
+                        No Jummah times — click + Add Khutbah to get started
+                      </div>
+                    ) : (
+                      <div className="flex gap-3">
+                        {extraTimings.jummah.map((t, i) => (
+                          <div key={i} className="flex-1 bg-zinc-800/40 border border-white/5 rounded-xl p-4 hover:border-white/10 transition-all">
+                            <div className="flex items-center justify-between mb-3">
+                              <span className={`text-[9px] font-black uppercase tracking-widest ${theme.label}`}>Khutbah {i + 1}</span>
+                              <button onClick={() => setExtraTimings(prev => ({ ...prev, jummah: prev.jummah.filter((_, j) => j !== i) }))}
+                                className="text-zinc-600 hover:text-rose-400 text-xs font-black transition-colors">×</button>
+                            </div>
+                            <input type="text" value={t}
+                              onChange={e => { const u = [...extraTimings.jummah]; u[i] = e.target.value; setExtraTimings(prev => ({ ...prev, jummah: u })); }}
+                              onBlur={e => { const u = [...extraTimings.jummah]; u[i] = formatTimeInput(e.target.value); setExtraTimings(prev => ({ ...prev, jummah: u })); }}
+                              placeholder="1:15 PM"
+                              className="w-full bg-zinc-900/60 border border-white/8 rounded-lg px-3 py-2 text-xl font-black text-white focus:outline-none focus:border-white/20" />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
+
+            {/* ── Source switch confirmation modal ── */}
+            {pendingSource && (
+              <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ backdropFilter: "blur(4px)", backgroundColor: "rgba(0,0,0,0.75)" }}>
+                <div className="w-full max-w-md bg-zinc-900 border border-white/8 rounded-3xl overflow-hidden shadow-2xl">
+
+                  {/* Top band */}
+                  <div className={`px-7 pt-7 pb-5 ${pendingSource === "excel" ? "bg-red-500/5 border-b border-red-500/10" : `bg-zinc-800/40 border-b border-white/5`}`}>
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${pendingSource === "excel" ? "bg-red-500/15 border border-red-500/25" : `${theme.iconBg}`}`}>
+                        {pendingSource === "excel"
+                          ? <Icon d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" className="w-5 h-5 text-red-400" />
+                          : <Icon d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" className={`w-5 h-5 ${theme.iconColor}`} />
+                        }
+                      </div>
+                      <div>
+                        <div className="text-xs font-black uppercase tracking-widest text-zinc-500 mb-0.5">Switching source</div>
+                        <div className="text-lg font-black text-white">
+                          {pendingSource === "excel" ? "Upload Excel" : "Auto-calculate"}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Before / After */}
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1 px-4 py-3 rounded-xl bg-zinc-800/80 border border-white/8 text-center">
+                        <div className="text-xs text-zinc-600 font-bold mb-0.5 uppercase tracking-wider">From</div>
+                        <div className="text-sm font-black text-zinc-300">{prayerSource === "backend" ? "Auto-calculate" : "Upload Excel"}</div>
+                      </div>
+                      <Icon d="M17 8l4 4m0 0l-4 4m4-4H3" className="w-4 h-4 text-zinc-600 shrink-0" />
+                      <div className={`flex-1 px-4 py-3 rounded-xl border text-center ${pendingSource === "excel" ? "bg-red-500/10 border-red-500/20" : `${theme.accentBg} ${theme.accentBorder}`}`}>
+                        <div className={`text-xs font-bold mb-0.5 uppercase tracking-wider ${pendingSource === "excel" ? "text-red-500/70" : theme.label}`}>To</div>
+                        <div className={`text-sm font-black ${pendingSource === "excel" ? "text-red-400" : theme.accent}`}>{pendingSource === "excel" ? "Upload Excel" : "Auto-calculate"}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Body */}
+                  <div className="px-7 py-5">
+                    <p className="text-zinc-400 text-sm leading-relaxed">
+                      {pendingSource === "excel"
+                        ? <><span className="text-red-400 font-bold">All prayer times will be deleted</span> from the database. You'll need to upload an Excel file to add them back.</>
+                        : <><span className={`${theme.accent} font-bold`}>Prayer times will be recalculated</span> for the full year using your location and method settings, overwriting any existing data.</>
+                      }
+                    </p>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="px-7 pb-7 flex gap-3">
+                    <button onClick={() => setPendingSource(null)}
+                      className="flex-1 py-3 rounded-xl font-bold text-sm text-zinc-400 border border-white/10 hover:bg-white/5 hover:text-white transition-all">
+                      Cancel
+                    </button>
+                    <button onClick={handleConfirmSourceSwitch}
+                      className={`flex-1 py-3 rounded-xl font-black text-sm transition-all ${
+                        pendingSource === "excel" ? "bg-red-500 hover:bg-red-400 text-white" : `${theme.btn} hover:opacity-90`
+                      }`}>
+                      {pendingSource === "excel" ? "Delete & Switch" : "Generate & Switch"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* ── Month + Action bar ── */}
             <div className="flex items-center gap-4 rounded-2xl px-5 py-4 mb-6 border bg-zinc-900/60 border-white/5">
               {/* Month pills */}
-              <div className="flex gap-2 flex-1">
+              <div className="flex gap-2 flex-1 overflow-x-auto pb-0.5 scrollbar-none">
                 {months.map((m) => {
                   const hasData = !!prayerTimesByMonth[m.value];
                   const isActive = selectedMonth === m.value;
                   return (
-                    <button key={m.value} onClick={() => setSelectedMonth(m.value)}
+                    <button key={m.value} onClick={() => { setSelectedMonth(m.value); setScheduleEdited(false); }}
                       className={`flex items-center gap-1.5 px-4 py-2 rounded-xl font-bold text-sm border-2 transition-all ${
                         isActive ? `${theme.accentBg} ${theme.accentBorder} ${theme.accent}` : "border-white/5 bg-zinc-800/30 hover:border-white/10 text-zinc-500 hover:text-white"
                       }`}>
@@ -834,46 +1383,47 @@ const Dashboard: React.FC = () => {
               </div>
 
               {/* Action */}
-              {prayerSource === "backend" ? (
-                <div className="flex items-center gap-3 shrink-0">
-                  <div className="text-right text-xs text-zinc-500">
-                    <div className="font-bold">{prayerSettings.city || "Toronto"}, {prayerSettings.country || "CA"}</div>
-                    <div>{CALC_METHODS.find(m => m.value === prayerSettings.method)?.label?.split(" – ")[0]}</div>
-                  </div>
-                  <button onClick={handleGenerateFromBackend} disabled={isGenerating}
-                    className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-black text-sm transition-all shrink-0 ${
-                      isGenerating ? "bg-zinc-700 text-zinc-500 cursor-not-allowed" : `${theme.btn} hover:scale-[1.02]`
-                    }`}>
-                    {isGenerating ? (
-                      <>
-                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                        </svg>
-                        Calculating...
-                      </>
-                    ) : `Generate ${months.find(m => m.value === selectedMonth)?.label?.split(" ")[0]}`}
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-3 shrink-0">
-                  <div>
-                    <input type="file" accept=".xlsx,.xls" onChange={handleFileChange} className="hidden" id="file-upload-bar" />
-                    <label htmlFor="file-upload-bar" className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-black text-sm cursor-pointer transition-all border-2 border-dashed ${
-                      uploadFile ? `${theme.accentBorder} ${theme.accentBg} ${theme.accent}` : "border-white/15 text-zinc-400 hover:border-white/30 hover:text-white"
-                    }`}>
-                      <Icon d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" className="w-4 h-4" />
-                      {uploadFile ? uploadFile.name : "Select .xlsx"}
-                    </label>
-                  </div>
-                  <button onClick={handleUploadPrayerTimes} disabled={!uploadFile || isUploading}
-                    className={`px-5 py-2.5 rounded-xl font-black text-sm transition-all shrink-0 ${
-                      !uploadFile || isUploading ? "bg-zinc-700 text-zinc-500 cursor-not-allowed" : `${theme.btn} hover:scale-[1.02]`
-                    }`}>
-                    {isUploading ? "Uploading..." : "Upload"}
-                  </button>
-                </div>
-              )}
+              <div className="flex items-center gap-3 shrink-0">
+                {prayerSource === "backend" ? (
+                  switchLoading ? (
+                    <div className="flex items-center gap-2 text-xs font-bold text-zinc-500">
+                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                      Generating…
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => setSelectedYear(y => y - 1)} className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 transition-all">
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" /></svg>
+                      </button>
+                      <span className="text-sm font-black text-white w-10 text-center">{selectedYear}</span>
+                      <button onClick={() => setSelectedYear(y => y + 1)} className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 transition-all">
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+                      </button>
+                    </div>
+                  )
+                ) : (
+                  <>
+                    <div>
+                      <input type="file" accept=".xlsx,.xls" onChange={handleFileChange} className="hidden" id="file-upload-bar" />
+                      <label htmlFor="file-upload-bar" className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-black text-sm cursor-pointer transition-all border-2 border-dashed ${
+                        uploadFile ? `${theme.accentBorder} ${theme.accentBg} ${theme.accent}` : "border-white/15 text-zinc-400 hover:border-white/30 hover:text-white"
+                      }`}>
+                        <Icon d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" className="w-4 h-4" />
+                        {uploadFile ? uploadFile.name : "Select .xlsx"}
+                      </label>
+                    </div>
+                    <button onClick={handleUploadPrayerTimes} disabled={!uploadFile || isUploading}
+                      className={`px-5 py-2.5 rounded-xl font-black text-sm transition-all ${
+                        !uploadFile || isUploading ? "bg-zinc-700 text-zinc-500 cursor-not-allowed" : `${theme.btn} hover:scale-[1.02]`
+                      }`}>
+                      {isUploading ? "Uploading..." : "Upload"}
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
 
             {/* Feedback messages */}
@@ -890,7 +1440,15 @@ const Dashboard: React.FC = () => {
             )}
 
             {/* ── Schedule table ── */}
-            {!prayerTimesByMonth[selectedMonth] ? (
+            {prayerLoading ? (
+              <div className="rounded-2xl border-2 border-dashed border-white/8 flex flex-col items-center justify-center text-center py-20">
+                <svg className="animate-spin h-10 w-10 mb-4 text-zinc-600" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                <div className="text-sm text-zinc-600 font-bold">Loading prayer times…</div>
+              </div>
+            ) : !prayerTimesByMonth[selectedMonth] ? (
               <div className="rounded-2xl border-2 border-dashed border-white/8 flex flex-col items-center justify-center text-center py-20">
                 <Icon d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" className="w-12 h-12 mb-4 text-zinc-700" />
                 <div className="font-black text-lg mb-2 text-zinc-500">
@@ -906,80 +1464,161 @@ const Dashboard: React.FC = () => {
                   <div>
                     <div className={`text-xs font-bold uppercase tracking-widest mb-1 ${theme.label}`}>Monthly Schedule</div>
                     <h2 className="text-xl font-black text-white">
-                      {months.find((m) => m.value === selectedMonth)?.label} — {prayerTimesByMonth[selectedMonth].length} days
+                      {months.find((m) => m.value === selectedMonth)?.label}
                     </h2>
                   </div>
                   <div className="flex items-center gap-3">
-                    {prayerSource === "excel" && (
-                      <span className="text-xs px-3 py-1.5 rounded-lg border font-bold border-white/10 text-zinc-500">
-                        Click start time to edit
-                      </span>
+                    {(scheduleEdited || savingSchedule || savedSchedule) && (
+                      <button onClick={handleSaveSchedule} disabled={savingSchedule}
+                        className={`flex items-center gap-1.5 px-4 py-2 rounded-xl font-black text-sm transition-all ${
+                          savedSchedule ? "bg-emerald-500/20 border border-emerald-500/40 text-emerald-400"
+                            : savingSchedule ? "bg-zinc-800 text-zinc-500 cursor-wait border border-white/5"
+                            : `${theme.btn}`
+                        }`}>
+                        {savingSchedule
+                          ? <><svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> Saving…</>
+                          : savedSchedule ? <><Icon d="M5 13l4 4L19 7" className="w-3.5 h-3.5" /> Saved</>
+                          : "Save"
+                        }
+                      </button>
                     )}
-                    <div className={`text-xs px-3 py-1.5 rounded-lg font-bold ${theme.accentBg} ${theme.accent} border ${theme.accentBorder}`}>
-                      Adhan &amp; Iqama from cards above
-                    </div>
                   </div>
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse">
-                    <thead>
-                      <tr className="border-b border-white/8">
-                        {[
-                          { label: "Date", w: "w-24" },
-                          { label: "Fajr", w: "" },
-                          { label: "Dhuhr", w: "" },
-                          { label: "Asr", w: "" },
-                          { label: "Maghrib", w: "" },
-                          { label: "Isha", w: "" },
-                        ].map((h, hi) => (
-                          <th key={h.label} colSpan={hi === 0 ? 1 : 3}
-                            className={`py-3 px-4 text-xs font-black uppercase tracking-widest text-zinc-500 ${hi > 0 ? "text-center border-l border-white/8" : "text-left"} ${h.w}`}>
-                            {h.label}
-                          </th>
-                        ))}
-                      </tr>
-                      <tr className="border-b-2 border-white/10">
-                        <th />
-                        {PRAYER_META.map((p) => (
-                          <React.Fragment key={p.key}>
-                            <th className="py-2 px-3 text-xs font-bold text-left border-l border-white/8 text-zinc-600">Start</th>
-                            <th className="py-2 px-3 text-xs font-bold text-left text-zinc-600">Adhan</th>
-                            <th className="py-2 px-3 text-xs font-bold text-left text-zinc-600">Iqama</th>
-                          </React.Fragment>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {prayerTimesByMonth[selectedMonth].map((day, i) => (
-                        <tr key={i} className="border-b border-white/5 hover:bg-white/[0.02] transition-all">
-                          <td className="py-3 px-4 font-black text-sm text-white">
-                            {day.date.split("-").slice(1).join("/")}
-                          </td>
-                          {PRAYER_META.map((p) => {
-                            const start = day[p.key] as string;
-                            return (
+                <div>
+                  {(() => {
+                    const extraCols: Record<string, string[]> = {
+                      fajr:    [...(jamaatSettings.fajr2 ? ["2nd"] : []), ...(jamaatSettings.fajr3 ? ["3rd"] : [])],
+                      dhuhr:   [],
+                      asr:     [],
+                      maghrib: [...(jamaatSettings.maghrib2 ? ["2nd"] : []), ...(jamaatSettings.maghrib3 ? ["3rd"] : [])],
+                      isha:    [],
+                    };
+                    const jummahCount = extraTimings.jummah.length;
+                    const totalCols = 1 + PRAYER_META.reduce((s, p) => s + 3 + extraCols[p.key].length, 0) + jummahCount;
+                    const compact = totalCols > 17;
+                    const tdPx = compact ? "px-1" : "px-2";
+                    const thPx = compact ? "px-1.5" : "px-3";
+                    const txtSz = compact ? "text-xs" : "text-sm";
+                    const inputCls = `w-full bg-transparent border border-transparent hover:border-white/10 focus:border-white/25 rounded px-1 py-0.5 ${txtSz} text-zinc-400 focus:text-white focus:outline-none transition-all placeholder-zinc-700`;
+                    return (
+                      <table className="w-full border-collapse" style={{ tableLayout: "fixed" }}>
+                        <thead>
+                          <tr className="border-b border-white/8">
+                            <th className={`py-3 px-3 ${txtSz} font-black uppercase tracking-widest text-zinc-500 text-left`} style={{ width: compact ? "52px" : "72px" }}>Date</th>
+                            {PRAYER_META.map((p) => (
+                              <th key={p.key} colSpan={3 + extraCols[p.key].length}
+                                className={`py-3 ${thPx} ${txtSz} font-black uppercase tracking-widest text-zinc-500 text-center border-l border-white/8`}>
+                                {p.label}
+                              </th>
+                            ))}
+                            {jummahCount > 0 && (
+                              <th colSpan={jummahCount}
+                                className={`py-3 ${thPx} ${txtSz} font-black uppercase tracking-widest text-zinc-500 text-center border-l border-white/8`}>
+                                Jummah
+                              </th>
+                            )}
+                          </tr>
+                          <tr className="border-b-2 border-white/10">
+                            <th />
+                            {PRAYER_META.map((p) => (
                               <React.Fragment key={p.key}>
-                                <td className="py-3 px-3 border-l border-white/5 font-bold text-sm text-zinc-200">
-                                  {prayerSource === "excel" ? (
-                                    <input type="text" value={start}
-                                      onChange={(e) => handleEditStartTime(i, p.key, e.target.value)}
-                                      className="w-24 text-sm font-bold py-0.5 px-1.5 rounded border bg-transparent focus:outline-none border-white/15 text-zinc-200 focus:border-white/35"
-                                    />
-                                  ) : <span>{start}</span>}
-                                </td>
-                                <td className="py-3 px-3 text-sm text-zinc-500">
-                                  {addMinsToTime(start, prayerOffsets[p.key].adhan)}
-                                </td>
-                                <td className="py-3 px-3 text-sm text-zinc-500">
-                                  {addMinsToTime(start, prayerOffsets[p.key].iqama)}
-                                </td>
+                                <th className={`py-2 ${thPx} ${txtSz} font-bold text-center border-l border-white/8 text-zinc-600`}>Start</th>
+                                <th className={`py-2 ${thPx} ${txtSz} font-bold text-center text-zinc-600`}>Adhan</th>
+                                <th className={`py-2 ${thPx} ${txtSz} font-bold text-center text-zinc-600`}>Iqama</th>
+                                {extraCols[p.key].map(n => (
+                                  <th key={n} className={`py-2 ${thPx} ${txtSz} font-bold text-center text-zinc-600`}>{n} Jamaat</th>
+                                ))}
                               </React.Fragment>
+                            ))}
+                            {Array.from({ length: jummahCount }, (_, i) => (
+                              <th key={i} className={`py-2 ${thPx} ${txtSz} font-bold text-center border-l border-white/8 text-zinc-600`}>
+                                Khutbah {i + 1}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {prayerTimesByMonth[selectedMonth].map((day, i) => {
+                            const d = day as unknown as Record<string, string>;
+                            const isFriday = new Date(day.date + "T12:00:00").getDay() === 5;
+                            return (
+                              <tr key={i} className="border-b border-white/5 hover:bg-white/[0.02] transition-all">
+                                <td className={`py-2 px-2 font-black ${txtSz} text-white`}>
+                                  {day.date.split("-").slice(1).join("/")}
+                                </td>
+                                {PRAYER_META.map((p) => {
+                                  const start = day[p.key] as string;
+                                  return (
+                                    <React.Fragment key={p.key}>
+                                      {/* Start time — read-only */}
+                                      <td className={`py-2 ${tdPx} border-l border-white/5 font-bold ${txtSz} text-zinc-400 text-center`}>
+                                        {to12h(start)}
+                                      </td>
+                                      {/* Adhan */}
+                                      <td className={`py-2 ${tdPx} ${txtSz} text-center`}>
+                                        <input
+                                          value={d[`${p.key}_adhan`] || ""}
+                                          onChange={e => handleEditCell(day.date, `${p.key}_adhan`, e.target.value)}
+                                          onBlur={e => handleFormatCell(day.date, `${p.key}_adhan`, e.target.value)}
+                                          placeholder="—"
+                                          className={inputCls + " text-center"}
+                                        />
+                                      </td>
+                                      {/* Iqama */}
+                                      <td className={`py-2 ${tdPx} ${txtSz} text-center`}>
+                                        <input
+                                          value={d[`${p.key}_iqama`] || ""}
+                                          onChange={e => handleEditCell(day.date, `${p.key}_iqama`, e.target.value)}
+                                          onBlur={e => handleFormatCell(day.date, `${p.key}_iqama`, e.target.value)}
+                                          placeholder="—"
+                                          className={inputCls + " text-center"}
+                                        />
+                                      </td>
+                                      {/* Extra jamaats */}
+                                      {extraCols[p.key].map((n) => {
+                                        const field = `${p.key}_iqama_${n === "2nd" ? 2 : 3}`;
+                                        return (
+                                          <td key={n} className={`py-2 ${tdPx} ${txtSz} text-center`}>
+                                            <input
+                                              value={d[field] || ""}
+                                              onChange={e => handleEditCell(day.date, field, e.target.value)}
+                                              onBlur={e => handleFormatCell(day.date, field, e.target.value)}
+                                              placeholder="—"
+                                              className={inputCls + " text-center"}
+                                            />
+                                          </td>
+                                        );
+                                      })}
+                                    </React.Fragment>
+                                  );
+                                })}
+                                {/* Jummah cells — editable on Fridays only */}
+                                {Array.from({ length: jummahCount }, (_, j) => {
+                                  const field = `jummah_${j + 1}`;
+                                  const val = d[field] || "";
+                                  return (
+                                    <td key={j} className={`py-2 ${tdPx} ${txtSz} border-l border-white/5`}>
+                                      {isFriday ? (
+                                        <input
+                                          value={val}
+                                          onChange={e => handleEditCell(day.date, field, e.target.value)}
+                                          onBlur={e => handleFormatCell(day.date, field, e.target.value)}
+                                          placeholder="—"
+                                          className={`w-full bg-transparent border border-transparent hover:border-white/10 focus:border-white/25 rounded px-1 py-0.5 ${txtSz} font-bold focus:outline-none transition-all placeholder-zinc-700 text-center ${theme.accent}`}
+                                        />
+                                      ) : (
+                                        <span className="text-zinc-700 px-1">—</span>
+                                      )}
+                                    </td>
+                                  );
+                                })}
+                              </tr>
                             );
                           })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                        </tbody>
+                      </table>
+                    );
+                  })()}
                 </div>
               </div>
             )}
@@ -1630,6 +2269,61 @@ const Dashboard: React.FC = () => {
                     </div>
                   </div>
 
+                </div>
+
+                {/* Multiple Jamaats */}
+                <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-7">
+                  <h3 className="text-xl font-black mb-1">Multiple Jamaats</h3>
+                  <p className="text-zinc-500 text-sm mb-6">Enable 2nd and 3rd jamaat for Fajr and Maghrib — controls appear in the Adhan &amp; Iqama batch update card.</p>
+                  <div className="grid grid-cols-2 gap-5">
+                    {([
+                      { key: "fajr2" as const, label: "Fajr", jamaat: "2nd Jamaat" },
+                      { key: "fajr3" as const, label: "Fajr", jamaat: "3rd Jamaat" },
+                      { key: "maghrib2" as const, label: "Maghrib", jamaat: "2nd Jamaat" },
+                      { key: "maghrib3" as const, label: "Maghrib", jamaat: "3rd Jamaat" },
+                    ]).map(({ key, label, jamaat }) => (
+                      <button key={key} onClick={() => setJamaatSettings(prev => ({ ...prev, [key]: !prev[key] }))}
+                        className={`flex items-center justify-between p-4 rounded-xl border-2 transition-all text-left ${
+                          jamaatSettings[key] ? `${theme.accentBg} ${theme.accentBorder}` : "border-white/5 bg-zinc-800/40 hover:border-white/10"
+                        }`}>
+                        <div>
+                          <div className={`font-black text-sm ${jamaatSettings[key] ? "text-white" : "text-zinc-300"}`}>{label} — {jamaat}</div>
+                          <div className="text-zinc-500 text-xs mt-0.5">{jamaatSettings[key] ? "Enabled" : "Disabled"}</div>
+                        </div>
+                        <div className={`w-10 h-5 rounded-full transition-all relative ${jamaatSettings[key] ? theme.accentBg + " border " + theme.accentBorder : "bg-zinc-700"}`}>
+                          <div className={`absolute top-0.5 w-4 h-4 rounded-full transition-all ${jamaatSettings[key] ? theme.dot + " right-0.5" : "bg-zinc-500 left-0.5"}`} />
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Times Source */}
+                <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-7">
+                  <h3 className="text-xl font-black mb-1">Times Source</h3>
+                  <p className="text-zinc-500 text-sm mb-6">Choose how prayer start times are populated</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    {[
+                      { k: "backend" as const, label: "Auto-calculate", sub: "Computed from location & method settings", icon: "M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18" },
+                      { k: "excel"   as const, label: "Upload Excel",   sub: "Import from a spreadsheet file",           icon: "M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" },
+                    ].map(opt => (
+                      <button key={opt.k}
+                        onClick={() => opt.k !== prayerSource && setPendingSource(opt.k)}
+                        className={`flex items-start gap-4 p-5 rounded-xl border-2 text-left transition-all ${
+                          prayerSource === opt.k
+                            ? `${theme.accentBg} ${theme.accentBorder}`
+                            : "border-white/5 bg-zinc-800/40 hover:border-white/10"
+                        }`}>
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${prayerSource === opt.k ? theme.iconBg : "bg-zinc-700/40"}`}>
+                          <Icon d={opt.icon} className={`w-5 h-5 ${prayerSource === opt.k ? theme.iconColor : "text-zinc-500"}`} />
+                        </div>
+                        <div>
+                          <div className={`font-black text-sm mb-0.5 ${prayerSource === opt.k ? "text-white" : "text-zinc-300"}`}>{opt.label}</div>
+                          <div className="text-zinc-500 text-xs">{opt.sub}</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 <button onClick={handleSaveSettings} className={`w-full py-4 rounded-xl font-black text-lg ${theme.btn} transition-all hover:scale-[1.01]`}>
