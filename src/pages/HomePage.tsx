@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
 import { supabaseAdmin } from "../lib/supabase";
-import { generateYearPrayerTimes } from "../lib/prayerTimes";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 interface PrayerTime {
@@ -15,8 +14,9 @@ interface PrayerTime {
   fajr_iqama_2?: string; fajr_iqama_3?: string;
   jummah_1?: string; jummah_2?: string; jummah_3?: string;
 }
-interface Event { id: number; title: string; description: string; date: string; time: string; }
-interface EventForm { title: string; description: string; date: string; time: string; }
+interface Event { id: string; title: string; description: string; date: string; time: string; endTime?: string; category: string; }
+interface EventForm { title: string; description: string; date: string; time: string; endTime: string; category: string; }
+interface Announcement { id: string; title: string; body: string; createdAt: string; expiresAt: string; }
 interface NotificationForm { type: string; title: string; message: string; }
 interface Question { id: number; name: string; email: string; question: string; date: string; answered: boolean; answer?: string; }
 interface Month { value: string; label: string; }
@@ -150,16 +150,22 @@ const Icon = ({ d, className = "w-5 h-5" }: { d: string; className?: string }) =
   </svg>
 );
 
-// ── Prayer method options (for PHP backend) ───────────────────────────────
+// ── Aladhan API calculation methods ───────────────────────────────────────
 const CALC_METHODS = [
-  { value: "ISNA",     label: "ISNA – Islamic Society of North America",   fajr: 15,   isha: 15 },
-  { value: "MWL",      label: "MWL – Muslim World League",                 fajr: 18,   isha: 17 },
-  { value: "Egyptian", label: "Egyptian – Egyptian General Authority",      fajr: 19.5, isha: 17.5 },
-  { value: "Makkah",   label: "Makkah – Umm Al-Qura University",           fajr: 18.5, isha: 0 },
-  { value: "Karachi",  label: "Karachi – Univ. of Islamic Sciences",       fajr: 18,   isha: 18 },
-  { value: "Tehran",   label: "Tehran – Geophysics Research Institute",     fajr: 17.7, isha: 14 },
-  { value: "Jafari",   label: "Jafari – Shia Ithna-Ashari (Qum)",         fajr: 16,   isha: 14 },
-  { value: "Custom",   label: "Custom – Define your own angles",            fajr: 0,    isha: 0 },
+  { value: "ISNA",      label: "Islamic Society of North America (ISNA)" },
+  { value: "MWL",       label: "Muslim World League" },
+  { value: "EGYPTIAN",  label: "Egyptian General Authority of Survey" },
+  { value: "MAKKAH",    label: "Umm Al-Qura University, Makkah" },
+  { value: "KARACHI",   label: "University of Islamic Sciences, Karachi" },
+  { value: "TEHRAN",    label: "Institute of Geophysics, Tehran" },
+  { value: "JAFARI",    label: "Jafari / Shia Ithna-Ashari" },
+  { value: "GULF",      label: "Gulf Region" },
+  { value: "KUWAIT",    label: "Kuwait" },
+  { value: "QATAR",     label: "Qatar" },
+  { value: "SINGAPORE", label: "Majlis Ugama Islam Singapura" },
+  { value: "TURKEY",    label: "Diyanet İşleri Başkanlığı, Turkey" },
+  { value: "DUBAI",     label: "Dubai" },
+  { value: "JORDAN",    label: "Ministry of Awqaf, Jordan" },
 ];
 
 const TIMEZONES = [
@@ -262,6 +268,153 @@ function formatTimeInput(val: string): string {
   return val;
 }
 
+// ── Local-state input to avoid re-rendering the whole page on every keystroke
+const LocalInput: React.FC<{
+  value: string;
+  onCommit: (v: string) => void;
+  type?: string;
+  className?: string;
+  placeholder?: string;
+  min?: string | number;
+  max?: string | number;
+  step?: string | number;
+  readOnly?: boolean;
+}> = ({ value, onCommit, type = "text", className, placeholder, min, max, step, readOnly }) => {
+  const [local, setLocal] = React.useState(value);
+  React.useEffect(() => { setLocal(value); }, [value]);
+  return (
+    <input
+      type={type}
+      value={local}
+      onChange={e => setLocal(e.target.value)}
+      onBlur={e => onCommit(e.target.value)}
+      placeholder={placeholder}
+      className={className}
+      readOnly={readOnly}
+      min={min}
+      max={max}
+      step={step}
+    />
+  );
+};
+
+const DatePicker: React.FC<{ value: string; onChange: (v: string) => void; placeholder?: string; align?: "left" | "right"; fullWidth?: boolean }> =
+  ({ value, onChange, placeholder = "Pick a date", align = "left", fullWidth = false }) => {
+  const [open, setOpen] = React.useState(false);
+  const parsed = value ? new Date(value + "T00:00:00") : null;
+  const [viewYear, setViewYear] = React.useState(() => parsed ? parsed.getFullYear() : new Date().getFullYear());
+  const [viewMonth, setViewMonth] = React.useState(() => parsed ? parsed.getMonth() : new Date().getMonth());
+  React.useEffect(() => {
+    if (value) { setViewYear(parseInt(value.slice(0, 4))); setViewMonth(parseInt(value.slice(5, 7)) - 1); }
+  }, [value]);
+  const prevMonth = () => viewMonth === 0 ? (setViewMonth(11), setViewYear(y => y - 1)) : setViewMonth(m => m - 1);
+  const nextMonth = () => viewMonth === 11 ? (setViewMonth(0), setViewYear(y => y + 1)) : setViewMonth(m => m + 1);
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  const firstDow = new Date(viewYear, viewMonth, 1).getDay();
+  const cells: (number | null)[] = [...Array(firstDow).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+  while (cells.length % 7 !== 0) cells.push(null);
+  const dayStr = (d: number) => `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  const today = new Date().toISOString().slice(0, 10);
+  const label = parsed ? parsed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : placeholder;
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen(o => !o)}
+        className={`flex items-center gap-2 bg-black/40 border-2 border-white/10 rounded-xl px-4 py-3 text-sm font-medium hover:border-white/20 transition-colors focus:outline-none ${fullWidth ? "w-full" : ""}`}>
+        <svg className="w-3.5 h-3.5 text-zinc-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <rect x="3" y="4" width="18" height="18" rx="2" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M16 2v4M8 2v4M3 10h18" strokeLinecap="round" />
+        </svg>
+        <span className={value ? "text-white" : "text-zinc-500"}>{label}</span>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[80]" onClick={() => setOpen(false)} />
+          <div className={`absolute top-full mt-2 z-[81] bg-zinc-900 border border-white/10 rounded-2xl p-4 shadow-2xl w-60 ${align === "right" ? "right-0" : "left-0"}`}>
+            <div className="flex items-center justify-between mb-3">
+              <button onClick={prevMonth} className="w-7 h-7 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-white transition-colors text-xs font-black">‹</button>
+              <span className="text-sm font-black text-white">{new Date(viewYear, viewMonth).toLocaleDateString("en-US", { month: "long", year: "numeric" })}</span>
+              <button onClick={nextMonth} className="w-7 h-7 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-white transition-colors text-xs font-black">›</button>
+            </div>
+            <div className="grid grid-cols-7 mb-1">
+              {["Su","Mo","Tu","We","Th","Fr","Sa"].map(d => (
+                <div key={d} className="text-center text-[10px] font-black text-zinc-600 py-0.5">{d}</div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7 gap-0.5">
+              {cells.map((day, idx) => {
+                const ds = day ? dayStr(day) : "";
+                const sel = ds === value;
+                const tod = ds === today;
+                return (
+                  <button key={idx} disabled={!day} onClick={() => { if (day) { onChange(ds); setOpen(false); } }}
+                    className={`h-8 w-full rounded-lg text-xs font-bold transition-all ${
+                      !day ? "invisible" :
+                      sel ? "bg-emerald-500 text-white font-black shadow-lg shadow-emerald-500/20" :
+                      tod ? "border border-emerald-500/40 text-emerald-400 font-black hover:bg-emerald-500/10" :
+                      "text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                    }`}>{day}</button>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+const BatchControl = React.memo(({ cell, onUpdate, placeholder = "6:00 AM", accentBg, accent }: {
+  cell: BatchCell;
+  onUpdate: (p: Partial<BatchCell>) => void;
+  placeholder?: string;
+  accentBg: string;
+  accent: string;
+}) => {
+  const [mode, setMode] = React.useState(cell.mode);
+  React.useEffect(() => { setMode(cell.mode); }, [cell.mode]);
+  return (
+    <div className="space-y-1.5">
+      <div className="flex rounded-md overflow-hidden border border-white/8 w-fit text-[10px] font-black">
+        {([{ v: "offset", label: "+Min" }, { v: "fixed", label: "Fixed" }] as const).map(m => (
+          <button key={m.v} onClick={() => { setMode(m.v); onUpdate({ mode: m.v }); }}
+            className={`px-2 py-0.5 transition-all ${mode === m.v ? `${accentBg} ${accent}` : "text-zinc-600 hover:text-zinc-300 bg-zinc-800/60"}`}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+      {mode === "offset" ? (
+        <div className="flex items-center gap-1">
+          <button onClick={() => onUpdate({ offset: Math.max(0, cell.offset - 1) })
+          } className="w-5 h-5 rounded flex items-center justify-center text-xs font-black bg-zinc-800 hover:bg-zinc-700 text-zinc-400 border border-white/8">−</button>
+          <span className="text-sm font-black w-11 text-center tabular-nums text-white">+{cell.offset}m</span>
+          <button onClick={() => onUpdate({ offset: cell.offset + 1 })} className="w-5 h-5 rounded flex items-center justify-center text-xs font-black bg-zinc-800 hover:bg-zinc-700 text-zinc-400 border border-white/8">+</button>
+        </div>
+      ) : (
+        <LocalInput value={cell.fixed} onCommit={v => onUpdate({ fixed: formatTimeInput(v) })} placeholder={placeholder}
+          className="w-24 bg-zinc-800/60 border border-white/10 rounded-md px-2 py-1 text-sm font-bold text-white focus:outline-none focus:border-white/30" />
+      )}
+    </div>
+  );
+});
+
+// ── Aladhan API year fetch ────────────────────────────────────────────────
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8080";
+
+async function fetchBackendYear(
+  ps: { latitude: string; longitude: string; timezone: string; method: string },
+  year: number
+): Promise<{ date: string; fajr: string; sunrise: string; dhuhr: string; asr: string; maghrib: string; isha: string }[]> {
+  const res = await fetch(`${BACKEND_URL}/api/generate_year.php`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lat: parseFloat(ps.latitude), lng: parseFloat(ps.longitude), timezone: ps.timezone, method: ps.method, year }),
+  });
+  if (!res.ok) throw new Error(`Backend error: ${res.status}`);
+  const json = await res.json();
+  if (!json.success) throw new Error(json.error || "Unknown backend error");
+  return json.times as { date: string; fajr: string; sunrise: string; dhuhr: string; asr: string; maghrib: string; isha: string }[];
+}
+
 // ── Dashboard Component ───────────────────────────────────────────────────
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -278,7 +431,7 @@ const Dashboard: React.FC = () => {
 
   // ── Core state ────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<string>("overview");
-  const [settingsTab, setSettingsTab] = useState<string>("general");
+  const [settingsTab, setSettingsTab] = useState<string>("profile");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [animDone, setAnimDone] = useState(false);
@@ -304,25 +457,10 @@ const Dashboard: React.FC = () => {
 
   // ── Prayer settings ───────────────────────────────────────────────────
   const [prayerSettings, setPrayerSettings] = useState({
-    city: "Toronto",
-    country: "Canada",
     latitude: "43.651070",
     longitude: "-79.347015",
-    elevation: "76",
     timezone: "America/Toronto",
     method: "ISNA",
-    asrMethod: "Standard",
-    higherLatRule: "AngleBased",
-    midnightMode: "Standard",
-    fajrAdjust: "0",
-    dhuhrAdjust: "0",
-    asrAdjust: "0",
-    maghribAdjust: "0",
-    ishaAdjust: "0",
-    sunriseAdjust: "0",
-    customFajrAngle: "15",
-    customIshaAngle: "15",
-    imsakMinutes: "10",
   });
 
   // ── Prayer times state ────────────────────────────────────────────────
@@ -351,7 +489,7 @@ const Dashboard: React.FC = () => {
     fajr_iqama: "", dhuhr_iqama: "", asr_iqama: "", maghrib_iqama: "", isha_iqama: "",
     jummah1: "", jummah2: "", jummah3: "",
   });
-  const [importMonth, setImportMonth] = useState<string>(() => {
+  const [importMonth, _setImportMonth] = useState<string>(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   });
@@ -378,19 +516,17 @@ const Dashboard: React.FC = () => {
   const [batchError, setBatchError] = useState("");
 
   // ── Events state ──────────────────────────────────────────────────────
-  const [events, setEvents] = useState<Event[]>([
-    { id: 1, title: "Friday Khutbah", description: "Special lecture on Islamic finance", date: "2026-03-08", time: "13:00" },
-    { id: 2, title: "Hifz Graduation Ceremony", description: "Annual graduation for our Huffaz students", date: "2026-03-15", time: "18:00" },
-    { id: 3, title: "Tajweed Workshop", description: "Workshop with Sheikh Yusuf on advanced Tajweed rules", date: "2026-03-22", time: "14:00" },
-  ]);
-  const [showEventModal, setShowEventModal] = useState(false);
+  const [events, setEvents] = useState<Event[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(true);
+  const [eventsSubTab, setEventsSubTab] = useState<"events" | "announcements">("events");
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [editingAnnouncement, setEditingAnnouncement] = useState<Announcement | null>(null);
+  const [announcementForm, setAnnouncementForm] = useState({ title: "", body: "", expiresAt: "" });
   const [editingEvent, setEditingEvent] = useState<Event | null>(null);
-  const [eventForm, setEventForm] = useState<EventForm>({ title: "", description: "", date: "", time: "" });
+  const [eventForm, setEventForm] = useState<EventForm>({ title: "", description: "", date: "", time: "", endTime: "", category: "General" });
+  const [eventsPanel, setEventsPanel] = useState(false);
 
   // ── Notifications state ───────────────────────────────────────────────
-  const [notificationForm, setNotificationForm] = useState<NotificationForm>({ type: "general", title: "", message: "" });
-  const [isSendingNotification, setIsSendingNotification] = useState(false);
-  const [notifSent, setNotifSent] = useState(false);
 
   // ── Questions state ───────────────────────────────────────────────────
   const [questions, setQuestions] = useState<Question[]>([
@@ -482,6 +618,7 @@ const Dashboard: React.FC = () => {
             grouped[key].push(normalized as unknown as PrayerTime);
           }
           setPrayerTimesByMonth(grouped);
+          originalMonthSnapshot.current = { ...grouped };
         }
         setPrayerLoading(false);
       });
@@ -507,10 +644,22 @@ const Dashboard: React.FC = () => {
         if (data?.times_source === "excel" || data?.times_source === "backend") {
           setPrayerSource(data.times_source);
         }
-        prayerSourceLoaded.current = true;
       });
   }, []);
 
+  // ── Load events & announcements from Supabase ─────────────────────────
+  useEffect(() => {
+    const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+    if (!masjidId) { setEventsLoading(false); return; }
+    Promise.all([
+      supabaseAdmin.from("events").select("*").eq("masjid_id", masjidId).order("date", { ascending: true }),
+      supabaseAdmin.from("announcements").select("*").eq("masjid_id", masjidId).order("created_at", { ascending: false }),
+    ]).then(([evRes, annRes]) => {
+      if (evRes.data) setEvents(evRes.data.map(r => ({ id: r.id, title: r.title, description: r.description || "", date: r.date, time: r.time || "", endTime: r.end_time || "", category: r.category || "" })));
+      if (annRes.data) setAnnouncements(annRes.data.map(r => ({ id: r.id, title: r.title, body: r.body || "", createdAt: r.created_at || "", expiresAt: r.expires_at || "" })));
+      setEventsLoading(false);
+    });
+  }, []);
 
   // ── Handlers ──────────────────────────────────────────────────────────
   const handleLogout = () => { localStorage.clear(); sessionStorage.clear(); navigate("/login"); };
@@ -604,16 +753,8 @@ const Dashboard: React.FC = () => {
       setSwitchLoading(true);
       setUploadError("");
       try {
-        const geo = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(prayerSettings.city + ", " + prayerSettings.country)}&format=json&limit=1`,
-          { headers: { "Accept-Language": "en" } }
-        );
-        const geoData = await geo.json();
-        if (!geoData || geoData.length === 0) throw new Error("Could not geocode city. Update city/country in Settings.");
-        const lat = parseFloat(geoData[0].lat);
-        const lng = parseFloat(geoData[0].lon);
         const year = new Date().getFullYear();
-        const times = generateYearPrayerTimes(lat, lng, prayerSettings.timezone, prayerSettings.method, year);
+        const times = await fetchBackendYear(prayerSettings, year);
         const rows = times.map(({ sunrise: _s, ...t }) => ({ masjid_id: masjidId, ...t, ...addDefaultAdhanIqama(t) }));
         for (let i = 0; i < rows.length; i += 100) {
           const { error } = await supabaseAdmin.from("prayer_times").upsert(rows.slice(i, i + 100), { onConflict: "masjid_id,date" });
@@ -626,6 +767,7 @@ const Dashboard: React.FC = () => {
           grouped[key].push({ ...row, ...addDefaultAdhanIqama(row) } as PrayerTime);
         }
         setPrayerTimesByMonth(grouped);
+        originalMonthSnapshot.current = { ...grouped };
         setUploadSuccess(`Prayer times auto-calculated for all of ${year}.`);
         setTimeout(() => setUploadSuccess(""), 4000);
       } catch (err) {
@@ -767,20 +909,15 @@ const Dashboard: React.FC = () => {
     finally { setIsUploading(false); }
   };
 
-  const handleUploadPrayerTimes = handleConfirmImport;
-
-  const handleEditStartTime = (dayIdx: number, field: keyof PrayerTime, value: string) => {
-    setPrayerTimesByMonth(prev => ({
-      ...prev,
-      [selectedMonth]: prev[selectedMonth].map((day, i) =>
-        i === dayIdx ? { ...day, [field]: value } : day
-      ),
-    }));
-  };
-
   const [savingSchedule, setSavingSchedule] = useState(false);
   const [savedSchedule, setSavedSchedule] = useState(false);
   const [scheduleEdited, setScheduleEdited] = useState(false);
+  const originalMonthSnapshot = useRef<Record<string, PrayerTime[]>>({});
+
+  // ── Generate prayer times state ───────────────────────────────────────
+  const [generating, setGenerating] = useState(false);
+  const [generateSuccess, setGenerateSuccess] = useState("");
+  const [generateError, setGenerateError] = useState("");
 
   const handleEditCell = (date: string, field: string, value: string) => {
     const monthKey = date.slice(0, 7);
@@ -791,16 +928,6 @@ const Dashboard: React.FC = () => {
     setScheduleEdited(true);
   };
 
-  const handleFormatCell = (date: string, field: string, value: string) => {
-    const formatted = formatTimeInput(value);
-    if (formatted !== value) {
-      const monthKey = date.slice(0, 7);
-      setPrayerTimesByMonth(prev => ({
-        ...prev,
-        [monthKey]: prev[monthKey].map(d => d.date === date ? { ...d, [field]: formatted } : d),
-      }));
-    }
-  };
 
   const handleSaveSchedule = async () => {
     const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
@@ -811,37 +938,76 @@ const Dashboard: React.FC = () => {
       await supabaseAdmin.from("prayer_times").upsert(rows.slice(i, i + 100), { onConflict: "masjid_id,date" });
     }
     setSavingSchedule(false); setSavedSchedule(true); setScheduleEdited(false);
+    originalMonthSnapshot.current[selectedMonth] = (prayerTimesByMonth[selectedMonth] || []).map(r => ({ ...r }));
     setTimeout(() => setSavedSchedule(false), 2500);
   };
 
-
-  const handleEventSubmit = () => {
-    if (!eventForm.title || !eventForm.date || !eventForm.time) { alert("Fill in all required fields"); return; }
-    if (editingEvent) setEvents(events.map((e) => e.id === editingEvent.id ? { ...e, ...eventForm } : e));
-    else setEvents([...events, { id: Date.now(), ...eventForm }]);
-    setShowEventModal(false); setEventForm({ title: "", description: "", date: "", time: "" }); setEditingEvent(null);
+  const handleDiscardChanges = () => {
+    const snap = originalMonthSnapshot.current[selectedMonth];
+    if (snap) setPrayerTimesByMonth(prev => ({ ...prev, [selectedMonth]: snap }));
+    setScheduleEdited(false);
   };
 
-  const handleDeleteEvent = (id: number) => { if (confirm("Delete this event?")) setEvents(events.filter((e) => e.id !== id)); };
+  const handleGeneratePrayerTimes = async () => {
+    const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+    if (!masjidId) return;
+    setGenerating(true); setGenerateError(""); setGenerateSuccess("");
+    try {
+      const times = await fetchBackendYear(prayerSettings, selectedYear);
+      const rows = times.map(({ sunrise: _s, ...t }) => ({ masjid_id: masjidId, ...t, ...addDefaultAdhanIqama(t) }));
+      for (let i = 0; i < rows.length; i += 100) {
+        const { error } = await supabaseAdmin.from("prayer_times").upsert(rows.slice(i, i + 100), { onConflict: "masjid_id,date" });
+        if (error) throw new Error(error.message);
+      }
+      const grouped: Record<string, PrayerTime[]> = {};
+      for (const { sunrise: _s, ...row } of times) {
+        const key = row.date.slice(0, 7);
+        if (!grouped[key]) grouped[key] = [];
+        grouped[key].push({ ...row, ...addDefaultAdhanIqama(row) } as PrayerTime);
+      }
+      setPrayerTimesByMonth(grouped);
+      originalMonthSnapshot.current = { ...grouped };
+      setGenerateSuccess(`${times.length} days generated for ${selectedYear}`);
+      setTimeout(() => setGenerateSuccess(""), 5000);
+    } catch (err) {
+      setGenerateError((err as Error).message);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleEventSubmit = async () => {
+    if (!eventForm.title || !eventForm.date || !eventForm.time) { alert("Fill in all required fields"); return; }
+    const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+    const row = { masjid_id: masjidId, title: eventForm.title, description: eventForm.description, date: eventForm.date, time: eventForm.time, end_time: eventForm.endTime || null, category: eventForm.category };
+    if (editingEvent) {
+      const { error } = await supabaseAdmin.from("events").update(row).eq("id", editingEvent.id);
+      if (error) { alert("Failed to save: " + error.message); return; }
+      setEvents(prev => prev.map(e => e.id === editingEvent.id ? { ...e, ...eventForm } : e));
+    } else {
+      const { data, error } = await supabaseAdmin.from("events").insert(row).select().single();
+      if (error) { alert("Failed to create: " + error.message); return; }
+      setEvents(prev => [...prev, { id: data.id, title: data.title, description: data.description, date: data.date, time: data.time, endTime: data.end_time || "", category: data.category }]);
+    }
+    setEventsPanel(false); setEventForm({ title: "", description: "", date: "", time: "", endTime: "", category: "General" }); setEditingEvent(null);
+  };
+
+  const handleDeleteEvent = async (id: string) => {
+    if (!confirm("Delete this event?")) return;
+    const { error } = await supabaseAdmin.from("events").delete().eq("id", id);
+    if (error) { alert("Failed to delete: " + error.message); return; }
+    setEvents(prev => prev.filter(e => e.id !== id));
+  };
 
   const handleEditEvent = (event: Event) => {
-    setEditingEvent(event); setEventForm({ title: event.title, description: event.description, date: event.date, time: event.time }); setShowEventModal(true);
+    setEditingEvent(event); setEventForm({ title: event.title, description: event.description, date: event.date, time: event.time, endTime: event.endTime || "", category: event.category || "General" }); setEventsPanel(true);
   };
 
-  const handleSendNotification = async () => {
-    if (!notificationForm.title || !notificationForm.message) { alert("Fill in all fields"); return; }
-    setIsSendingNotification(true);
-    await new Promise((r) => setTimeout(r, 1500));
-    setIsSendingNotification(false); setNotifSent(true);
-    setNotificationForm({ type: "general", title: "", message: "" });
-    setTimeout(() => setNotifSent(false), 4000);
-  };
 
   const sidebarTabs = [
     { id: "overview",      name: "Overview",       icon: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" },
     { id: "prayer-times",  name: "Prayer Times",   icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
     { id: "events",        name: "Events",          icon: "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" },
-    { id: "notifications", name: "Notifications",   icon: "M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" },
     { id: "questions",     name: "Questions",       icon: "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" },
     { id: "settings",      name: "Settings",        icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" },
   ];
@@ -957,87 +1123,171 @@ const Dashboard: React.FC = () => {
       <div className={`${sidebarCollapsed ? "ml-16" : "ml-64"} pt-[73px] pb-12 min-h-screen transition-all duration-200`}>
 
         {/* ════════ OVERVIEW ════════ */}
-        {activeTab === "overview" && (
-          <div className="relative">
-            <IslamicPattern color={theme.patternColor} opacity={0.025} />
-            <div className="relative px-8 py-10">
-              <div className="mb-10">
-                <div className={`text-xs font-bold uppercase tracking-widest mb-2 ${theme.label}`}>Dashboard</div>
-                <h1 className="text-4xl font-black mb-2">
-                  Welcome back, <span className={theme.accent}>{generalSettings.masjidName.split(" ")[0]}</span>
-                </h1>
-                <p className="text-zinc-400 text-lg">
-                  {currentTime.toLocaleDateString("en-CA", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
-                </p>
-              </div>
+        {activeTab === "overview" && (() => {
+          const todayDate = new Date();
+          const todayISO = todayDate.toISOString().slice(0, 10);
+          const MONTHS_SHORT = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
 
-              <div className="grid grid-cols-4 gap-5 mb-8">
-                {[
-                  { label: "Total Events",      value: stats.totalEvents,                   icon: "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z", col: theme.iconBg, txt: theme.iconColor },
-                  { label: "Upcoming Events",   value: stats.upcomingEvents,                icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z",                                              col: "bg-sky-500/15 border border-sky-500/30",    txt: "text-sky-400" },
-                  { label: "Subscribers",       value: stats.subscribedUsers.toLocaleString(), icon: "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z", col: "bg-violet-500/15 border border-violet-500/30", txt: "text-violet-400" },
-                  { label: "Notifications Sent", value: stats.notificationsSent,             icon: "M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9", col: "bg-amber-500/15 border border-amber-500/30",  txt: "text-amber-400" },
-                ].map((s) => (
-                  <div key={s.label} className="bg-zinc-900/60 border border-white/5 rounded-2xl p-6 hover:border-white/10 transition-all">
-                    <div className={`w-11 h-11 rounded-xl flex items-center justify-center mb-4 ${s.col}`}>
-                      <Icon d={s.icon} className={`w-5 h-5 ${s.txt}`} />
-                    </div>
-                    <div className="text-3xl font-black mb-1">{s.value}</div>
-                    <div className="text-sm font-bold text-zinc-500">{s.label}</div>
-                  </div>
-                ))}
-              </div>
+          // Find next prayer
+          const nowMins = todayDate.getHours() * 60 + todayDate.getMinutes();
+          const prayerKeys = ["fajr","dhuhr","asr","maghrib","isha"] as const;
+          const prayerMins = prayerKeys.map(k => {
+            const t = todayRow?.[k] || "";
+            const m = t.match(/^(\d{1,2}):(\d{2})/);
+            return m ? parseInt(m[1]) * 60 + parseInt(m[2]) : -1;
+          });
+          const nextIdx = prayerMins.findIndex(m => m > nowMins);
+          const nextPrayerIdx = nextIdx === -1 ? 0 : nextIdx;
 
-              {/* Today's prayer times */}
-              <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-6 mb-6">
-                <div className="flex items-center justify-between mb-6">
+          const upcomingEvents = events.filter(e => e.date >= todayISO).sort((a,b) => a.date.localeCompare(b.date));
+          const activeAnnouncements = announcements.filter(a => !a.expiresAt || a.expiresAt >= todayISO);
+          const unansweredQ = questions.filter(q => !q.answered).length;
+
+          const row = todayRow as unknown as Record<string,string> | undefined;
+
+          return (
+            <div className="relative">
+              <IslamicPattern color={theme.patternColor} opacity={0.025} />
+              <div className="relative px-8 py-10">
+
+                {/* ── Hero ── */}
+                <div className="flex items-start justify-between mb-8">
                   <div>
-                    <div className={`text-xs font-bold uppercase tracking-widest mb-1 ${theme.label}`}>Today</div>
-                    <h2 className="text-2xl font-black">Prayer Times</h2>
+                    <div className={`text-xs font-bold uppercase tracking-widest mb-2 ${theme.label}`}>Dashboard</div>
+                    <h1 className="text-4xl font-black mb-1">{generalSettings.masjidName}</h1>
+                    <p className="text-zinc-500 font-bold">
+                      {currentTime.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
+                    </p>
                   </div>
-                  <button onClick={() => setActiveTab("prayer-times")} className={`text-sm font-bold transition-colors ${theme.accent} hover:opacity-70`}>
-                    Manage →
-                  </button>
-                </div>
-                <div className="grid grid-cols-5 gap-4">
-                  {todayPrayers.map((p, i) => (
-                    <div key={p.name} className={`text-center p-4 rounded-xl border transition-all ${i === 3 ? theme.nextCard : "bg-zinc-800/40 border-white/5"}`}>
-                      {i === 3 && <div className={`text-xs font-black mb-1 uppercase tracking-wider ${theme.accent}`}>Next</div>}
-                      <div className="text-lg mb-1 text-zinc-500" style={{ fontFamily: "serif" }}>{p.arabic}</div>
-                      <div className={`text-xs font-bold mb-2 ${i === 3 ? theme.accent : "text-zinc-400"}`}>{p.name}</div>
-                      <div className={`text-lg font-black tabular-nums ${i === 3 ? "text-white" : "text-zinc-200"}`}>{p.time}</div>
+                  <div className="text-right">
+                    <div className={`text-5xl font-black tabular-nums tracking-tight ${theme.accent}`}>
+                      {currentTime.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true }).replace(" AM","").replace(" PM","")}
+                      <span className="text-xl ml-1 text-zinc-500">{currentTime.getHours() >= 12 ? "PM" : "AM"}</span>
                     </div>
+                    <div className="text-zinc-600 text-sm font-bold mt-1">Local Time</div>
+                  </div>
+                </div>
+
+                {/* ── Stats strip ── */}
+                <div className="grid grid-cols-4 gap-4 mb-8">
+                  {[
+                    { label: "Upcoming Events",        value: upcomingEvents.length,      icon: "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z", accent: theme.iconColor, bg: theme.iconBg, action: () => setActiveTab("events") },
+                    { label: "Active Announcements",   value: activeAnnouncements.length, icon: "M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z", accent: "text-sky-400", bg: "bg-sky-500/15 border border-sky-500/30", action: () => setActiveTab("events") },
+                    { label: "Unanswered Questions",   value: unansweredQ,                icon: "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z", accent: unansweredQ > 0 ? "text-rose-400" : "text-zinc-500", bg: unansweredQ > 0 ? "bg-rose-500/15 border border-rose-500/30" : "bg-zinc-800/60 border border-white/5", action: () => setActiveTab("questions") },
+                    { label: "Prayer Days Loaded",     value: Object.values(prayerTimesByMonth).reduce((s,m) => s + m.length, 0), icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z", accent: "text-violet-400", bg: "bg-violet-500/15 border border-violet-500/30", action: () => setActiveTab("prayer-times") },
+                  ].map(s => (
+                    <button key={s.label} onClick={s.action} className="bg-zinc-900/60 border border-white/5 rounded-2xl p-5 hover:border-white/10 transition-all text-left group">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-3 ${s.bg}`}>
+                        <Icon d={s.icon} className={`w-5 h-5 ${s.accent}`} />
+                      </div>
+                      <div className="text-3xl font-black mb-0.5">{s.value}</div>
+                      <div className="text-xs font-bold text-zinc-500">{s.label}</div>
+                    </button>
                   ))}
                 </div>
-              </div>
 
-              {/* Upcoming events */}
-              <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <div>
-                    <div className={`text-xs font-bold uppercase tracking-widest mb-1 ${theme.label}`}>Schedule</div>
-                    <h2 className="text-2xl font-black">Upcoming Events</h2>
-                  </div>
-                  <button onClick={() => setActiveTab("events")} className={`text-sm font-bold transition-colors ${theme.accent} hover:opacity-70`}>View All →</button>
-                </div>
-                <div className="space-y-3">
-                  {events.slice(0, 3).map((ev) => (
-                    <div key={ev.id} className={`flex items-center gap-5 p-4 bg-zinc-800/40 border border-white/5 rounded-xl hover:border-white/10 transition-all group`}>
-                      <div className={`w-14 h-14 ${theme.iconBg} rounded-xl flex flex-col items-center justify-center flex-shrink-0`}>
-                        <div className={`text-xs font-black uppercase ${theme.iconColor}`}>{ev.date.split("-")[1] === "03" ? "MAR" : ev.date.split("-")[1] === "04" ? "APR" : "MON"}</div>
-                        <div className="text-white text-xl font-black leading-none">{ev.date.split("-")[2]}</div>
-                      </div>
-                      <div className="flex-1">
-                        <div className="font-black mb-0.5">{ev.title}</div>
-                        <div className="text-zinc-500 text-sm">{ev.time}</div>
-                      </div>
+                {/* ── Prayer Times ── */}
+                <div className="bg-zinc-900/60 border border-white/5 rounded-2xl overflow-hidden mb-6">
+                  <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between">
+                    <div>
+                      <div className={`text-xs font-bold uppercase tracking-widest mb-0.5 ${theme.label}`}>Today's Schedule</div>
+                      <h2 className="text-lg font-black">Prayer Times</h2>
                     </div>
-                  ))}
+                    <button onClick={() => setActiveTab("prayer-times")} className={`text-xs font-black uppercase tracking-widest ${theme.accent} hover:opacity-70 transition-opacity`}>Manage →</button>
+                  </div>
+                  <div className="grid grid-cols-5 divide-x divide-white/5">
+                    {prayerKeys.map((key, i) => {
+                      const isNext = i === nextPrayerIdx && !!todayRow;
+                      const adhan = fmt(row?.[`${key}_adhan`] || row?.[key]);
+                      const iqama = fmt(row?.[`${key}_iqama`]);
+                      const labels = ["Fajr","Dhuhr","Asr","Maghrib","Isha"];
+                      const arabic = ["الفجر","الظهر","العصر","المغرب","العشاء"];
+                      return (
+                        <div key={key} className={`flex flex-col items-center py-6 px-3 transition-all ${isNext ? `${theme.accentBg}` : ""}`}>
+                          {isNext && <div className={`text-[9px] font-black uppercase tracking-widest mb-2 px-2 py-0.5 rounded-full ${theme.accentBg} ${theme.accent} border ${theme.accentBorder}`}>Next</div>}
+                          <div className={`text-base mb-0.5 ${isNext ? theme.accent : "text-zinc-600"}`} style={{ fontFamily: "serif" }}>{arabic[i]}</div>
+                          <div className={`text-xs font-black mb-3 ${isNext ? "text-white" : "text-zinc-400"}`}>{labels[i]}</div>
+                          <div className={`text-lg font-black tabular-nums ${isNext ? "text-white" : "text-zinc-300"}`}>{adhan}</div>
+                          <div className="text-[10px] text-zinc-600 font-bold mt-0.5">Adhan</div>
+                          <div className={`text-sm font-bold tabular-nums mt-2 ${isNext ? theme.accent : "text-zinc-500"}`}>{iqama}</div>
+                          <div className="text-[10px] text-zinc-600 font-bold mt-0.5">Iqama</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* ── Bottom grid ── */}
+                <div className="grid grid-cols-2 gap-6">
+
+                  {/* Upcoming Events */}
+                  <div className="bg-zinc-900/60 border border-white/5 rounded-2xl overflow-hidden">
+                    <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between">
+                      <h2 className="text-base font-black">Upcoming Events</h2>
+                      <button onClick={() => setActiveTab("events")} className={`text-xs font-black uppercase tracking-widest ${theme.accent} hover:opacity-70 transition-opacity`}>View All →</button>
+                    </div>
+                    {upcomingEvents.length === 0 ? (
+                      <div className="py-12 text-center text-zinc-700">
+                        <Icon d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" className="w-8 h-8 mx-auto mb-2" />
+                        <p className="text-sm font-bold">No upcoming events</p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-white/5">
+                        {upcomingEvents.slice(0, 4).map(ev => {
+                          const [yyyy, mm, dd] = ev.date.split("-");
+                          const isToday = ev.date === todayISO;
+                          return (
+                            <div key={ev.id} className="flex items-center gap-4 px-6 py-4 hover:bg-white/[0.02] transition-colors">
+                              <div className={`w-11 shrink-0 rounded-xl flex flex-col items-center justify-center py-2 ${isToday ? theme.iconBg : "bg-zinc-800/60"}`}>
+                                <div className={`text-[8px] font-black uppercase tracking-widest ${isToday ? theme.iconColor : "text-zinc-600"}`}>{MONTHS_SHORT[parseInt(mm)-1]}</div>
+                                <div className={`text-lg font-black leading-none mt-0.5 ${isToday ? "text-white" : "text-zinc-400"}`}>{dd}</div>
+                                <div className={`text-[8px] font-bold ${isToday ? "text-zinc-400" : "text-zinc-600"}`}>{yyyy}</div>
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-black text-sm text-white truncate">{ev.title}</div>
+                                <div className="text-zinc-500 text-xs mt-0.5">{to12h(ev.time)}{ev.endTime ? ` – ${to12h(ev.endTime)}` : ""}</div>
+                              </div>
+                              {isToday && <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full shrink-0 ${theme.accentBg} ${theme.accent} border ${theme.accentBorder}`}>Today</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Recent Announcements */}
+                  <div className="bg-zinc-900/60 border border-white/5 rounded-2xl overflow-hidden">
+                    <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between">
+                      <h2 className="text-base font-black">Announcements</h2>
+                      <button onClick={() => { setActiveTab("events"); setEventsSubTab("announcements"); }} className={`text-xs font-black uppercase tracking-widest ${theme.accent} hover:opacity-70 transition-opacity`}>View All →</button>
+                    </div>
+                    {activeAnnouncements.length === 0 ? (
+                      <div className="py-12 text-center text-zinc-700">
+                        <Icon d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" className="w-8 h-8 mx-auto mb-2" />
+                        <p className="text-sm font-bold">No active announcements</p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-white/5">
+                        {activeAnnouncements.slice(0, 4).map(ann => (
+                          <div key={ann.id} className="px-6 py-4 hover:bg-white/[0.02] transition-colors">
+                            <div className="font-black text-sm text-white mb-1 truncate">{ann.title}</div>
+                            <div className="text-zinc-500 text-xs leading-relaxed line-clamp-2">{ann.body}</div>
+                            {ann.expiresAt && (
+                              <div className="text-zinc-600 text-[10px] font-bold mt-1.5">
+                                Expires {new Date(ann.expiresAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ════════ PRAYER TIMES ════════ */}
         {activeTab === "prayer-times" && (() => {
@@ -1048,8 +1298,6 @@ const Dashboard: React.FC = () => {
             { key: "maghrib" as keyof PrayerTime, label: "Maghrib", arabic: "المغرب" },
             { key: "isha" as keyof PrayerTime,    label: "Isha",    arabic: "العشاء" },
           ];
-          const sampleDay = prayerTimesByMonth[selectedMonth]?.[0];
-
           return (
           <div className="px-8 py-10">
 
@@ -1123,40 +1371,6 @@ const Dashboard: React.FC = () => {
 
             {/* ── Adhan & Iqama Schedule ── */}
             {(() => {
-              const renderControl = (cell: BatchCell, onUpdate: (p: Partial<BatchCell>) => void, placeholder = "6:00 AM") => (
-                <div className="space-y-1.5">
-                  <div className="flex rounded-md overflow-hidden border border-white/8 w-fit text-[10px] font-black">
-                    {([{ v: "offset", label: "+Min" }, { v: "fixed", label: "Fixed" }] as const).map(m => (
-                      <button key={m.v} onClick={() => onUpdate({ mode: m.v })}
-                        className={`px-2 py-0.5 transition-all ${cell.mode === m.v ? `${theme.accentBg} ${theme.accent}` : "text-zinc-600 hover:text-zinc-300 bg-zinc-800/60"}`}>
-                        {m.label}
-                      </button>
-                    ))}
-                  </div>
-                  {cell.mode === "offset" ? (
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => onUpdate({ offset: Math.max(0, cell.offset - 1) })}
-                        className="w-5 h-5 rounded flex items-center justify-center text-xs font-black bg-zinc-800 hover:bg-zinc-700 text-zinc-400 border border-white/8">−</button>
-                      <span className="text-sm font-black w-11 text-center tabular-nums text-white">+{cell.offset}m</span>
-                      <button onClick={() => onUpdate({ offset: cell.offset + 1 })}
-                        className="w-5 h-5 rounded flex items-center justify-center text-xs font-black bg-zinc-800 hover:bg-zinc-700 text-zinc-400 border border-white/8">+</button>
-                    </div>
-                  ) : (
-                    <input value={cell.fixed} onChange={e => onUpdate({ fixed: e.target.value })}
-                      onBlur={e => onUpdate({ fixed: formatTimeInput(e.target.value) })}
-                      placeholder={placeholder}
-                      className="w-24 bg-zinc-800/60 border border-white/10 rounded-md px-2 py-1 text-sm font-bold text-white focus:outline-none focus:border-white/30" />
-                  )}
-                </div>
-              );
-
-              const renderJamaat2or3 = (
-                cell: BatchCell2,
-                _onToggle: () => void,
-                onUpdate: (p: Partial<BatchCell>) => void,
-                _label: string,
-                placeholder: string
-              ) => renderControl(cell, onUpdate, placeholder);
 
               return (
                 <div className="rounded-2xl bg-zinc-900/60 border border-white/5 mb-8 overflow-hidden">
@@ -1173,17 +1387,11 @@ const Dashboard: React.FC = () => {
                         <div className="flex items-center gap-2">
                           <div className="flex flex-col gap-0.5">
                             <span className="text-[9px] font-black uppercase tracking-widest text-zinc-600 text-right">From</span>
-                            <div className="bg-zinc-800/80 border border-white/8 rounded-xl px-3 py-2">
-                              <input type="date" value={batchFrom} onChange={e => setBatchFrom(e.target.value)}
-                                className="bg-transparent text-sm font-bold text-white focus:outline-none" />
-                            </div>
+                            <DatePicker value={batchFrom} onChange={setBatchFrom} placeholder="Start date" align="left" />
                           </div>
                           <div className="flex flex-col gap-0.5">
                             <span className="text-[9px] font-black uppercase tracking-widest text-zinc-600 text-right">To</span>
-                            <div className="bg-zinc-800/80 border border-white/8 rounded-xl px-3 py-2">
-                              <input type="date" value={batchTo} onChange={e => setBatchTo(e.target.value)}
-                                className="bg-transparent text-sm font-bold text-white focus:outline-none" />
-                            </div>
+                            <DatePicker value={batchTo} onChange={setBatchTo} placeholder="End date" align="left" />
                           </div>
                           <div className="flex flex-col gap-0.5">
                             <span className="text-[9px] font-black uppercase tracking-widest text-zinc-600 opacity-0">Btn</span>
@@ -1229,11 +1437,10 @@ const Dashboard: React.FC = () => {
                     </div>
                     {PRAYER_META.map(p => (
                       <div key={p.key} className="px-5 py-4 border-l border-white/5">
-                        {renderControl(
-                          (batchAdhan as unknown as Record<string, BatchCell>)[p.key],
-                          patch => setBatchAdhan(prev => ({ ...prev, [p.key]: { ...(prev as unknown as Record<string, BatchCell>)[p.key], ...patch } })),
-                          "6:00 AM"
-                        )}
+                        <BatchControl
+                          cell={(batchAdhan as unknown as Record<string, BatchCell>)[p.key]}
+                          onUpdate={patch => setBatchAdhan(prev => ({ ...prev, [p.key]: { ...(prev as unknown as Record<string, BatchCell>)[p.key], ...patch } }))}
+                          placeholder="6:00 AM" accentBg={theme.accentBg} accent={theme.accent} />
                       </div>
                     ))}
                   </div>
@@ -1245,11 +1452,10 @@ const Dashboard: React.FC = () => {
                     </div>
                     {PRAYER_META.map(p => (
                       <div key={p.key} className="px-5 py-4 border-l border-white/5">
-                        {renderControl(
-                          (batchIqama as unknown as Record<string, BatchCell>)[p.key],
-                          patch => setBatchIqama(prev => ({ ...prev, [p.key]: { ...(prev as unknown as Record<string, BatchCell>)[p.key], ...patch } })),
-                          "6:30 AM"
-                        )}
+                        <BatchControl
+                          cell={(batchIqama as unknown as Record<string, BatchCell>)[p.key]}
+                          onUpdate={patch => setBatchIqama(prev => ({ ...prev, [p.key]: { ...(prev as unknown as Record<string, BatchCell>)[p.key], ...patch } }))}
+                          placeholder="6:30 AM" accentBg={theme.accentBg} accent={theme.accent} />
                       </div>
                     ))}
                   </div>
@@ -1265,12 +1471,10 @@ const Dashboard: React.FC = () => {
                         const k = p.key as "fajr" | "maghrib";
                         return (
                           <div key={p.key} className="px-5 py-4 border-l border-white/5">
-                            {show ? renderJamaat2or3(
-                              batchIqama2[k],
-                              () => setBatchIqama2(prev => ({ ...prev, [k]: { ...prev[k], enabled: !prev[k].enabled } })),
-                              patch => setBatchIqama2(prev => ({ ...prev, [k]: { ...prev[k], ...patch } })),
-                              "", "7:00 AM"
-                            ) : <span className="text-zinc-700 text-xs">—</span>}
+                            {show ? <BatchControl cell={batchIqama2[k]}
+                              onUpdate={patch => setBatchIqama2(prev => ({ ...prev, [k]: { ...prev[k], ...patch } }))}
+                              placeholder="7:00 AM" accentBg={theme.accentBg} accent={theme.accent} />
+                            : <span className="text-zinc-700 text-xs">—</span>}
                           </div>
                         );
                       })}
@@ -1288,12 +1492,10 @@ const Dashboard: React.FC = () => {
                         const k = p.key as "fajr" | "maghrib";
                         return (
                           <div key={p.key} className="px-5 py-4 border-l border-white/5">
-                            {show ? renderJamaat2or3(
-                              batchIqama3[k],
-                              () => setBatchIqama3(prev => ({ ...prev, [k]: { ...prev[k], enabled: !prev[k].enabled } })),
-                              patch => setBatchIqama3(prev => ({ ...prev, [k]: { ...prev[k], ...patch } })),
-                              "", "7:30 AM"
-                            ) : <span className="text-zinc-700 text-xs">—</span>}
+                            {show ? <BatchControl cell={batchIqama3[k]}
+                              onUpdate={patch => setBatchIqama3(prev => ({ ...prev, [k]: { ...prev[k], ...patch } }))}
+                              placeholder="7:30 AM" accentBg={theme.accentBg} accent={theme.accent} />
+                            : <span className="text-zinc-700 text-xs">—</span>}
                           </div>
                         );
                       })}
@@ -1326,9 +1528,9 @@ const Dashboard: React.FC = () => {
                               <button onClick={() => setExtraTimings(prev => ({ ...prev, jummah: prev.jummah.filter((_, j) => j !== i) }))}
                                 className="text-zinc-600 hover:text-rose-400 text-xs font-black transition-colors">×</button>
                             </div>
-                            <input type="text" value={t}
-                              onChange={e => { const u = [...extraTimings.jummah]; u[i] = e.target.value; setExtraTimings(prev => ({ ...prev, jummah: u })); }}
-                              onBlur={e => { const u = [...extraTimings.jummah]; u[i] = formatTimeInput(e.target.value); setExtraTimings(prev => ({ ...prev, jummah: u })); }}
+                            <LocalInput
+                              value={t}
+                              onCommit={v => { const u = [...extraTimings.jummah]; u[i] = formatTimeInput(v); setExtraTimings(prev => ({ ...prev, jummah: u })); }}
                               placeholder="1:15 PM"
                               className="w-full bg-zinc-900/60 border border-white/8 rounded-lg px-3 py-2 text-xl font-black text-white focus:outline-none focus:border-white/20" />
                           </div>
@@ -1512,6 +1714,12 @@ const Dashboard: React.FC = () => {
                     </h2>
                   </div>
                   <div className="flex items-center gap-3">
+                    {scheduleEdited && !savingSchedule && (
+                      <button onClick={handleDiscardChanges}
+                        className="px-4 py-2 rounded-xl font-black text-sm transition-all text-zinc-500 hover:text-white border border-white/5 hover:border-white/15">
+                        Discard
+                      </button>
+                    )}
                     {(scheduleEdited || savingSchedule || savedSchedule) && (
                       <button onClick={handleSaveSchedule} disabled={savingSchedule}
                         className={`flex items-center gap-1.5 px-4 py-2 rounded-xl font-black text-sm transition-all ${
@@ -1600,20 +1808,18 @@ const Dashboard: React.FC = () => {
                                       </td>
                                       {/* Adhan */}
                                       <td className={`py-2 ${tdPx} ${txtSz} text-center`}>
-                                        <input
+                                        <LocalInput
                                           value={d[`${p.key}_adhan`] || ""}
-                                          onChange={e => handleEditCell(day.date, `${p.key}_adhan`, e.target.value)}
-                                          onBlur={e => handleFormatCell(day.date, `${p.key}_adhan`, e.target.value)}
+                                          onCommit={v => handleEditCell(day.date, `${p.key}_adhan`, formatTimeInput(v))}
                                           placeholder="—"
                                           className={inputCls + " text-center"}
                                         />
                                       </td>
                                       {/* Iqama */}
                                       <td className={`py-2 ${tdPx} ${txtSz} text-center`}>
-                                        <input
+                                        <LocalInput
                                           value={d[`${p.key}_iqama`] || ""}
-                                          onChange={e => handleEditCell(day.date, `${p.key}_iqama`, e.target.value)}
-                                          onBlur={e => handleFormatCell(day.date, `${p.key}_iqama`, e.target.value)}
+                                          onCommit={v => handleEditCell(day.date, `${p.key}_iqama`, formatTimeInput(v))}
                                           placeholder="—"
                                           className={inputCls + " text-center"}
                                         />
@@ -1623,10 +1829,9 @@ const Dashboard: React.FC = () => {
                                         const field = `${p.key}_iqama_${n === "2nd" ? 2 : 3}`;
                                         return (
                                           <td key={n} className={`py-2 ${tdPx} ${txtSz} text-center`}>
-                                            <input
+                                            <LocalInput
                                               value={d[field] || ""}
-                                              onChange={e => handleEditCell(day.date, field, e.target.value)}
-                                              onBlur={e => handleFormatCell(day.date, field, e.target.value)}
+                                              onCommit={v => handleEditCell(day.date, field, formatTimeInput(v))}
                                               placeholder="—"
                                               className={inputCls + " text-center"}
                                             />
@@ -1643,10 +1848,9 @@ const Dashboard: React.FC = () => {
                                   return (
                                     <td key={j} className={`py-2 ${tdPx} ${txtSz} border-l border-white/5`}>
                                       {isFriday ? (
-                                        <input
+                                        <LocalInput
                                           value={val}
-                                          onChange={e => handleEditCell(day.date, field, e.target.value)}
-                                          onBlur={e => handleFormatCell(day.date, field, e.target.value)}
+                                          onCommit={v => handleEditCell(day.date, field, formatTimeInput(v))}
                                           placeholder="—"
                                           className={`w-full bg-transparent border border-transparent hover:border-white/10 focus:border-white/25 rounded px-1 py-0.5 ${txtSz} font-bold focus:outline-none transition-all placeholder-zinc-700 text-center ${theme.accent}`}
                                         />
@@ -1671,175 +1875,266 @@ const Dashboard: React.FC = () => {
         })()}
 
         {/* ════════ EVENTS ════════ */}
-        {activeTab === "events" && (
-          <div className="px-8 py-10">
-            <div className="flex items-center justify-between mb-10">
-              <div>
-                <div className={`text-xs font-bold uppercase tracking-widest mb-2 ${theme.label}`}>Management</div>
-                <h1 className="text-4xl font-black mb-2">Events & Announcements</h1>
-                <p className="text-zinc-400 text-lg">Manage your masjid's events</p>
-              </div>
-              <button
-                onClick={() => { setEditingEvent(null); setEventForm({ title: "", description: "", date: "", time: "" }); setShowEventModal(true); }}
-                className={`px-6 py-3 ${theme.btn} rounded-xl font-black hover:scale-105 transition-all`}
-              >
-                + Create Event
-              </button>
-            </div>
-            {events.length === 0 ? (
-              <div className="text-center py-20 text-zinc-600">
-                <Icon d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" className="w-16 h-16 mx-auto mb-4" />
-                <p className="text-xl font-bold">No events yet</p>
-              </div>
-            ) : (
-              <div className="grid md:grid-cols-2 gap-5">
-                {events.map((ev) => (
-                  <div key={ev.id} className="bg-zinc-900/60 border border-white/5 rounded-2xl p-6 hover:border-white/10 transition-all">
-                    <div className="flex items-start gap-4 mb-4">
-                      <div className={`w-14 h-14 ${theme.iconBg} rounded-xl flex flex-col items-center justify-center flex-shrink-0`}>
-                        <div className={`text-xs font-black uppercase ${theme.iconColor}`}>{ev.date.split("-")[1] === "03" ? "MAR" : ev.date.split("-")[1] === "04" ? "APR" : "MON"}</div>
-                        <div className="text-white text-xl font-black leading-none">{ev.date.split("-")[2]}</div>
-                      </div>
-                      <div className="flex-1">
-                        <h3 className="text-xl font-black mb-1">{ev.title}</h3>
-                        <p className="text-zinc-500 text-sm">{ev.description}</p>
-                      </div>
+        {activeTab === "events" && (() => {
+          const today = new Date().toISOString().slice(0, 10);
+          const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+
+          const openNewEvent = () => { setEditingEvent(null); setEventForm({ title: "", description: "", date: "", time: "", endTime: "", category: "General" }); setEventsPanel(true); };
+          const openNewAnnouncement = () => { setEditingAnnouncement(null); setAnnouncementForm({ title: "", body: "", expiresAt: "" }); setEventsPanel(true); };
+          const closePanel = () => { setEventsPanel(false); setEditingEvent(null); setEditingAnnouncement(null); };
+
+          const sortedAnnouncements = [...announcements].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+          return (
+            <div className="flex" style={{ minHeight: "calc(100vh - 73px)" }}>
+
+              {/* ── Left: List panel ── */}
+              <div className="flex-1 overflow-y-auto border-r border-transparent" style={{ maxHeight: "calc(100vh - 73px)", borderRightColor: eventsPanel ? "rgba(255,255,255,0.08)" : "transparent", transition: "border-color 0.35s ease" }}>
+                <div className="px-8 py-8">
+
+                  {/* Header */}
+                  <div className="flex items-center justify-between mb-7">
+                    <div>
+                      <div className={`text-xs font-bold uppercase tracking-widest mb-1.5 ${theme.label}`}>Management</div>
+                      <h1 className="text-3xl font-black">Events & Announcements</h1>
                     </div>
-                    <div className="flex gap-2 text-sm mb-4">
-                      <span className={`flex items-center gap-1.5 ${theme.accent}`}><Icon d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" className="w-4 h-4" />{ev.date}</span>
-                      <span className="text-zinc-600">·</span>
-                      <span className="text-zinc-400">{ev.time}</span>
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => handleEditEvent(ev)} className="flex-1 py-2.5 rounded-xl font-bold border border-white/10 text-zinc-400 hover:bg-white/5 hover:text-white transition-all text-sm">Edit</button>
-                      <button onClick={() => handleDeleteEvent(ev.id)} className="flex-1 py-2.5 rounded-xl font-bold bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-all text-sm">Delete</button>
-                    </div>
+                    <button
+                      onClick={eventsSubTab === "events" ? openNewEvent : openNewAnnouncement}
+                      className={`px-5 py-2.5 ${theme.btn} rounded-xl font-black text-sm hover:scale-105 transition-all`}>
+                      + {eventsSubTab === "events" ? "New Event" : "New Announcement"}
+                    </button>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
 
-        {/* ════════ NOTIFICATIONS ════════ */}
-        {activeTab === "notifications" && (
-          <div className="px-8 py-10">
-            <div className="mb-8">
-              <div className={`text-xs font-bold uppercase tracking-widest mb-2 ${theme.label}`}>Broadcast</div>
-              <h1 className="text-4xl font-black mb-2">Send Notifications</h1>
-              <p className="text-zinc-400 text-lg">Deliver announcements to {stats.subscribedUsers.toLocaleString()} subscribers</p>
-            </div>
-            {notifSent && (
-              <div className="mb-6 p-5 bg-emerald-500/15 border-2 border-emerald-500/40 rounded-2xl flex items-center gap-4">
-                <div className="w-10 h-10 bg-emerald-500/20 rounded-full flex items-center justify-center shrink-0">
-                  <Icon d="M5 13l4 4L19 7" className="w-5 h-5 text-emerald-400" />
-                </div>
-                <div>
-                  <div className="font-black">Notification Sent!</div>
-                  <div className="text-emerald-400 text-sm font-bold">Delivered to {stats.subscribedUsers.toLocaleString()} subscribers</div>
-                </div>
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-6 items-stretch">
-
-              {/* Left: Compose */}
-              <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-7 flex flex-col space-y-5">
-                <div>
-                  <h2 className="text-xl font-black mb-0.5">Compose</h2>
-                  <p className="text-zinc-500 text-sm">Write and send a broadcast message</p>
-                </div>
-                <div>
-                  <label className={labelCls}>Type</label>
-                  <div className="grid grid-cols-3 gap-3 mt-1">
-                    {[
-                      { value: "general", label: "General",     icon: "M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" },
-                      { value: "prayer",  label: "Prayer Time", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
-                      { value: "event",   label: "Event",       icon: "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" },
-                    ].map((t) => (
-                      <button key={t.value} onClick={() => setNotificationForm({ ...notificationForm, type: t.value })}
-                        className={`p-4 rounded-xl border-2 transition-all ${notificationForm.type === t.value ? `${theme.accentBg} ${theme.accentBorder}` : "border-white/5 bg-zinc-800/40 hover:border-white/10"}`}>
-                        <Icon d={t.icon} className={`w-6 h-6 mx-auto mb-2 ${notificationForm.type === t.value ? theme.iconColor : "text-zinc-500"}`} />
-                        <div className={`text-xs font-black text-center ${notificationForm.type === t.value ? "text-white" : "text-zinc-500"}`}>{t.label}</div>
+                  {/* Sub-tabs */}
+                  <div className="flex items-center gap-1 bg-zinc-900/60 border border-white/5 rounded-xl p-1 w-fit mb-7">
+                    {([
+                      { k: "events" as const,        label: "Events",        icon: "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" },
+                      { k: "announcements" as const, label: "Announcements", icon: "M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" },
+                    ]).map(t => (
+                      <button key={t.k} onClick={() => { setEventsSubTab(t.k); setEventsPanel(false); setEditingEvent(null); setEditingAnnouncement(null); }}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-black transition-all ${eventsSubTab === t.k ? `${theme.accentBg} ${theme.accent}` : "text-zinc-500 hover:text-white"}`}>
+                        <Icon d={t.icon} className="w-4 h-4" />
+                        {t.label}
+                        {t.k === "announcements" && announcements.length > 0 && (
+                          <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full ${eventsSubTab === t.k ? "bg-black/20" : "bg-zinc-700 text-zinc-300"}`}>{announcements.length}</span>
+                        )}
                       </button>
                     ))}
                   </div>
-                </div>
-                <div>
-                  <label className={labelCls}>Title</label>
-                  <input type="text" value={notificationForm.title} maxLength={50}
-                    onChange={(e) => setNotificationForm({ ...notificationForm, title: e.target.value })}
-                    placeholder="e.g., Jummah Prayer Update" className={inputCls} />
-                  <div className="text-xs text-right text-zinc-600 mt-1">{notificationForm.title.length}/50</div>
-                </div>
-                <div className="flex-1">
-                  <label className={labelCls}>Message</label>
-                  <textarea value={notificationForm.message} maxLength={200} rows={5}
-                    onChange={(e) => setNotificationForm({ ...notificationForm, message: e.target.value })}
-                    placeholder="Enter your message..." className={inputCls + " resize-none"} />
-                  <div className="text-xs text-right text-zinc-600 mt-1">{notificationForm.message.length}/200</div>
-                </div>
-                <button onClick={handleSendNotification} disabled={isSendingNotification || !notificationForm.title || !notificationForm.message}
-                  className={`w-full py-4 rounded-xl font-black text-lg transition-all ${isSendingNotification || !notificationForm.title || !notificationForm.message ? "bg-zinc-700 text-zinc-500 cursor-not-allowed" : `${theme.btn} hover:scale-[1.01]`}`}>
-                  {isSendingNotification ? (
-                    <span className="flex items-center justify-center gap-2">
-                      <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                      </svg>
-                      Sending...
-                    </span>
-                  ) : `Send to ${stats.subscribedUsers.toLocaleString()} Subscribers`}
-                </button>
-              </div>
 
-              {/* Right: Stats + Preview */}
-              <div className="flex flex-col gap-5">
-                {/* Reach stats */}
-                <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-7">
-                  <h2 className="text-xl font-black mb-5">Reach</h2>
-                  <div className="grid grid-cols-2 gap-4">
-                    {[
-                      { label: "Subscribers", value: stats.subscribedUsers.toLocaleString(), icon: "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" },
-                      { label: "Sent This Month", value: stats.notificationsSent, icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" },
-                    ].map((s) => (
-                      <div key={s.label} className="bg-zinc-800/60 rounded-xl p-4 border border-white/5">
-                        <div className={`w-8 h-8 ${theme.iconBg} rounded-lg flex items-center justify-center mb-3`}>
-                          <Icon d={s.icon} className={`w-4 h-4 ${theme.iconColor}`} />
+                  {/* ── Events list ── */}
+                  {eventsSubTab === "events" && (
+                    <div>
+                      {eventsLoading ? (
+                        <div className="text-center py-20 text-zinc-600">
+                          <svg className="animate-spin w-8 h-8 mx-auto mb-3" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                          <p className="text-sm font-bold">Loading events...</p>
                         </div>
-                        <div className={`text-2xl font-black ${theme.accent}`}>{s.value}</div>
-                        <div className="text-zinc-500 text-xs font-bold mt-0.5">{s.label}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Live notification preview */}
-                <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-7 flex-1">
-                  <h2 className="text-xl font-black mb-5">Preview</h2>
-                  <div className="bg-zinc-800/60 border border-white/5 rounded-2xl p-5">
-                    <div className="flex items-start gap-3">
-                      <div className={`w-10 h-10 ${theme.iconBg} rounded-xl flex items-center justify-center shrink-0`}>
-                        <CrescentIcon className={`w-5 h-5 ${theme.iconColor}`} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-black text-sm text-white">{generalSettings.masjidName}</div>
-                        <div className={`text-sm mt-0.5 ${notificationForm.title ? "text-zinc-200" : "text-zinc-600"}`}>
-                          {notificationForm.title || "Notification title will appear here"}
+                      ) : events.length === 0 ? (
+                        <div className="text-center py-20 text-zinc-700">
+                          <Icon d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" className="w-12 h-12 mx-auto mb-3" />
+                          <p className="font-black">No events</p>
                         </div>
-                        <div className={`text-xs mt-1.5 leading-relaxed ${notificationForm.message ? "text-zinc-400" : "text-zinc-700"}`}>
-                          {notificationForm.message || "Your message body will appear here. Keep it clear and concise."}
+                      ) : (
+                        <div className="space-y-3">
+                          {events.slice().sort((a, b) => a.date.localeCompare(b.date)).map(ev => {
+                            const [yyyy, mm, dd] = ev.date.split("-");
+                            const isToday = ev.date === today;
+                            const isPast = ev.date < today;
+                            const isEditing = editingEvent?.id === ev.id && eventsPanel;
+                            return (
+                              <div key={ev.id} className={`bg-zinc-900/60 border rounded-2xl p-4 flex items-center gap-4 transition-all ${isEditing ? `${theme.accentBorder} ${theme.accentBg}` : isToday ? `${theme.accentBorder}` : "border-white/5 hover:border-white/10"}`}>
+                                <div className={`w-12 shrink-0 rounded-xl flex flex-col items-center justify-center py-2 ${isPast ? "bg-zinc-800/60" : isToday ? "bg-black/20" : theme.iconBg}`}>
+                                  <div className={`text-[9px] font-black uppercase tracking-widest ${isPast ? "text-zinc-600" : theme.iconColor}`}>{MONTHS[parseInt(mm) - 1]}</div>
+                                  <div className={`text-xl font-black leading-none mt-0.5 ${isPast ? "text-zinc-500" : "text-white"}`}>{dd}</div>
+                                  <div className={`text-[9px] font-bold ${isPast ? "text-zinc-600" : "text-zinc-400"}`}>{yyyy}</div>
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 mb-0.5">
+                                    <h3 className={`font-black text-sm ${isPast ? "text-zinc-400" : "text-white"}`}>{ev.title}</h3>
+                                    {isToday && <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full ${theme.accentBg} ${theme.accent} border ${theme.accentBorder}`}>Today</span>}
+                                  </div>
+                                  <p className="text-zinc-500 text-xs truncate">{ev.description}</p>
+                                  <span className="text-zinc-600 text-xs font-bold">{to12h(ev.time)}{ev.endTime ? ` – ${to12h(ev.endTime)}` : ""}</span>
+                                </div>
+                                <div className="flex gap-1.5 shrink-0">
+                                  <button onClick={() => handleEditEvent(ev)} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${isEditing ? `${theme.accentBg} ${theme.accentBorder} ${theme.accent}` : "border-white/8 text-zinc-400 hover:bg-white/5 hover:text-white"}`}>Edit</button>
+                                  <button onClick={() => handleDeleteEvent(ev.id)} className="px-3 py-1.5 rounded-lg text-xs font-bold bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-all">Delete</button>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
-                        <div className="text-zinc-600 text-xs mt-2">just now</div>
-                      </div>
+                      )}
                     </div>
-                  </div>
-                  <p className="text-zinc-600 text-xs mt-4 text-center">This is how your notification will appear on subscribers' phones</p>
+                  )}
+
+                  {/* ── Announcements list ── */}
+                  {eventsSubTab === "announcements" && (
+                    <div className="space-y-3">
+                      {announcements.length === 0 ? (
+                        <div className="text-center py-20 text-zinc-700">
+                          <Icon d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" className="w-12 h-12 mx-auto mb-3" />
+                          <p className="font-black">No announcements yet</p>
+                        </div>
+                      ) : sortedAnnouncements.map(ann => {
+                        const isEditing = editingAnnouncement?.id === ann.id && eventsPanel;
+                        return (
+                          <div key={ann.id} className={`bg-zinc-900/60 border rounded-2xl p-5 transition-all ${isEditing ? `${theme.accentBorder} ${theme.accentBg}` : "border-white/5 hover:border-white/10"}`}>
+                            <div className="flex items-start gap-3">
+                              <div className="flex-1 min-w-0">
+                                <h3 className="font-black text-white text-sm mb-1">{ann.title}</h3>
+                                <p className="text-zinc-400 text-xs leading-relaxed line-clamp-2 mb-3">{ann.body}</p>
+                                <div className="flex items-center gap-3">
+                                  {ann.createdAt && (
+                                    <span className="flex items-center gap-1 text-[10px] font-bold text-zinc-500">
+                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                                      Posted {new Date(ann.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                                    </span>
+                                  )}
+                                  {ann.expiresAt && (
+                                    <span className={`flex items-center gap-1 text-[10px] font-bold ${new Date(ann.expiresAt) < new Date() ? "text-red-400" : "text-zinc-500"}`}>
+                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                      Expires {new Date(ann.expiresAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex gap-1.5 shrink-0">
+                                <button onClick={() => { setEditingAnnouncement(ann); setAnnouncementForm({ title: ann.title, body: ann.body, expiresAt: ann.expiresAt }); setEventsPanel(true); }}
+                                  className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${isEditing ? `${theme.accentBg} ${theme.accentBorder} ${theme.accent}` : "border-white/8 text-zinc-400 hover:bg-white/5 hover:text-white"}`}>Edit</button>
+                                <button onClick={async () => { if (!confirm("Delete this announcement?")) return; const { error } = await supabaseAdmin.from("announcements").delete().eq("id", ann.id); if (error) { alert("Failed to delete: " + error.message); return; } setAnnouncements(prev => prev.filter(a => a.id !== ann.id)); }}
+                                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-all">Delete</button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
                 </div>
               </div>
 
+              {/* ── Right: Form panel ── */}
+              <div
+                style={{
+                  width: eventsPanel ? "50%" : "0",
+                  maxHeight: "calc(100vh - 73px)",
+                  overflow: eventsPanel ? "auto" : "hidden",
+                  transition: "width 0.35s cubic-bezier(0.4,0,0.2,1)",
+                  flexShrink: 0,
+                }}>
+                <div style={{
+                  opacity: eventsPanel ? 1 : 0,
+                  transform: eventsPanel ? "translateX(0)" : "translateX(24px)",
+                  transition: "opacity 0.25s ease 0.1s, transform 0.25s ease 0.1s",
+                  minWidth: "400px",
+                }}>
+                  <div className="px-8 py-8">
+                    {/* Panel header */}
+                    <div className="flex items-center justify-between mb-8">
+                      <div>
+                        <div className={`text-xs font-bold uppercase tracking-widest mb-1.5 ${theme.label}`}>
+                          {eventsSubTab === "events" ? "Event" : "Announcement"}
+                        </div>
+                        <h2 className="text-2xl font-black">
+                          {eventsSubTab === "events"
+                            ? (editingEvent ? "Edit Event" : "New Event")
+                            : (editingAnnouncement ? "Edit Announcement" : "New Announcement")}
+                        </h2>
+                      </div>
+                      <button onClick={closePanel} className="w-9 h-9 flex items-center justify-center rounded-xl bg-zinc-800/60 border border-white/8 text-zinc-400 hover:text-white hover:bg-white/5 transition-all">
+                        <Icon d="M6 18L18 6M6 6l12 12" className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* ── Event form ── */}
+                    {eventsSubTab === "events" && (
+                      <div className="space-y-5">
+                        <div>
+                          <label className={labelCls}>Title <span className="text-red-400">*</span></label>
+                          <LocalInput type="text" placeholder="e.g. Friday Khutbah" value={eventForm.title}
+                            onCommit={v => setEventForm(p => ({ ...p, title: v }))} className={inputCls} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Description</label>
+                          <textarea rows={4} placeholder="Describe the event..." value={eventForm.description}
+                            onChange={e => setEventForm(p => ({ ...p, description: e.target.value }))}
+                            className={inputCls + " resize-none"} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Date <span className="text-red-400">*</span></label>
+                          <DatePicker value={eventForm.date} onChange={v => setEventForm(p => ({ ...p, date: v }))} placeholder="Select date" align="left" fullWidth />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className={labelCls}>Start Time <span className="text-red-400">*</span></label>
+                            <LocalInput type="text" placeholder="e.g. 1:30 PM" value={eventForm.time}
+                              onCommit={v => setEventForm(p => ({ ...p, time: formatTimeInput(v) || v }))} className={inputCls} />
+                          </div>
+                          <div>
+                            <label className={labelCls}>End Time <span className="text-zinc-600">(optional)</span></label>
+                            <LocalInput type="text" placeholder="e.g. 3:00 PM" value={eventForm.endTime}
+                              onCommit={v => setEventForm(p => ({ ...p, endTime: formatTimeInput(v) || v }))} className={inputCls} />
+                          </div>
+                        </div>
+                        <div className="flex gap-3 pt-2">
+                          <button onClick={closePanel} className="flex-1 py-3 rounded-xl font-bold border border-white/10 text-zinc-400 hover:bg-white/5 transition-all">Cancel</button>
+                          <button onClick={handleEventSubmit} className={`flex-1 py-3 ${theme.btn} rounded-xl font-black transition-all hover:scale-[1.02]`}>
+                            {editingEvent ? "Save Changes" : "Create Event"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── Announcement form ── */}
+                    {eventsSubTab === "announcements" && (
+                      <div className="space-y-5">
+                        <div>
+                          <label className={labelCls}>Title <span className="text-red-400">*</span></label>
+                          <LocalInput type="text" placeholder="Announcement title" value={announcementForm.title}
+                            onCommit={v => setAnnouncementForm(p => ({ ...p, title: v }))} className={inputCls} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Body <span className="text-red-400">*</span></label>
+                          <textarea rows={5} placeholder="Write your announcement..." value={announcementForm.body}
+                            onChange={e => setAnnouncementForm(p => ({ ...p, body: e.target.value }))}
+                            className={inputCls + " resize-none"} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Expires (optional)</label>
+                          <DatePicker value={announcementForm.expiresAt} onChange={v => setAnnouncementForm(p => ({ ...p, expiresAt: v }))} placeholder="Select expiry date" align="left" fullWidth />
+                        </div>
+                        <div className="flex gap-3 pt-2">
+                          <button onClick={closePanel} className="flex-1 py-3 rounded-xl font-bold border border-white/10 text-zinc-400 hover:bg-white/5 transition-all">Cancel</button>
+                          <button onClick={async () => {
+                            if (!announcementForm.title || !announcementForm.body) return;
+                            const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+                            const row = { masjid_id: masjidId, title: announcementForm.title, body: announcementForm.body, expires_at: announcementForm.expiresAt || null };
+                            if (editingAnnouncement) {
+                              const { error } = await supabaseAdmin.from("announcements").update(row).eq("id", editingAnnouncement.id);
+                              if (error) { alert("Failed to save: " + error.message); return; }
+                              setAnnouncements(prev => prev.map(a => a.id === editingAnnouncement.id ? { ...a, ...announcementForm } : a));
+                            } else {
+                              const { data, error } = await supabaseAdmin.from("announcements").insert(row).select().single();
+                              if (error) { alert("Failed to post: " + error.message); return; }
+                              setAnnouncements(prev => [...prev, { id: data.id, title: data.title, body: data.body || "", createdAt: data.created_at || today, expiresAt: data.expires_at || "" }]);
+                            }
+                            closePanel();
+                          }} className={`flex-1 py-3 ${theme.btn} rounded-xl font-black transition-all hover:scale-[1.02]`}>
+                            {editingAnnouncement ? "Save Changes" : "Post Announcement"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
+
 
         {/* ════════ QUESTIONS ════════ */}
         {activeTab === "questions" && (() => {
@@ -1987,183 +2282,128 @@ const Dashboard: React.FC = () => {
 
         {/* ════════ SETTINGS ════════ */}
         {activeTab === "settings" && (
-          <div className="px-8 py-10">
-            <div className="mb-8">
-              <div className={`text-xs font-bold uppercase tracking-widest mb-2 ${theme.label}`}>Configuration</div>
-              <h1 className="text-4xl font-black mb-2">Settings</h1>
-              <p className="text-zinc-400 text-lg">Configure your masjid profile, prayer times, and appearance</p>
-            </div>
+          <div className="flex" style={{ minHeight: "calc(100vh - 73px)" }}>
 
-            {/* Settings sub-nav */}
-            <div className="flex gap-2 mb-8 border-b border-white/5 pb-4">
+            {/* ── Settings sidebar ── */}
+            <div className="w-56 shrink-0 border-r border-white/5 py-8 px-3 flex flex-col gap-0.5">
+              <div className="text-[10px] font-black uppercase tracking-widest text-zinc-600 px-3 mb-2">Settings</div>
               {[
-                { id: "general", label: "General", icon: "M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" },
-                { id: "prayer", label: "Prayer Settings", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
-                { id: "theme", label: "Theme", icon: "M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" },
-              ].map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => setSettingsTab(t.id)}
-                  className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm border-2 transition-all ${
-                    settingsTab === t.id ? `${theme.accentBg} ${theme.accentBorder} ${theme.accent}` : "border-transparent text-zinc-500 hover:text-white"
-                  }`}
-                >
-                  <Icon d={t.icon} className="w-4 h-4" />
+                { id: "profile",    label: "Masjid Profile",   icon: "M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" },
+                { id: "social",     label: "Social Media",     icon: "M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" },
+                { id: "prayer",     label: "Prayer Settings",  icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
+                { id: "appearance", label: "Appearance",       icon: "M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" },
+              ].map(t => (
+                <button key={t.id} onClick={() => setSettingsTab(t.id)}
+                  className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm font-bold transition-all text-left ${settingsTab === t.id ? `${theme.accentBg} ${theme.accent} border ${theme.accentBorder}` : "text-zinc-500 hover:text-white hover:bg-white/5"}`}>
+                  <Icon d={t.icon} className="w-4 h-4 shrink-0" />
                   {t.label}
                 </button>
               ))}
             </div>
 
-            {/* ── GENERAL SETTINGS ── */}
-            {settingsTab === "general" && (
-              <div className="space-y-6">
+            {/* ── Settings content ── */}
+            <div className="flex-1 overflow-y-auto px-10 py-8">
+
+            {/* ── PROFILE ── */}
+            {settingsTab === "profile" && (
+              <div className="max-w-xl">
+                <div className="mb-7">
+                  <h2 className="text-2xl font-black mb-1">Masjid Profile</h2>
+                  <p className="text-zinc-500 text-sm">Basic info shown across your dashboard and public site</p>
+                </div>
 
                 {settingsSaved && (
-                  <div className="p-4 bg-emerald-500/15 border-2 border-emerald-500/40 rounded-xl flex items-center gap-3">
-                    <Icon d="M5 13l4 4L19 7" className="w-5 h-5 text-emerald-400" />
-                    <span className="text-emerald-400 font-bold">Settings saved successfully!</span>
+                  <div className="mb-6 p-4 bg-emerald-500/15 border border-emerald-500/40 rounded-xl flex items-center gap-3">
+                    <Icon d="M5 13l4 4L19 7" className="w-4 h-4 text-emerald-400" />
+                    <span className="text-emerald-400 font-bold text-sm">Saved successfully</span>
                   </div>
                 )}
 
-                {/* Row 1: Identity + Contact */}
-                <div className="grid grid-cols-2 gap-6 items-stretch">
-                  <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-7 flex flex-col space-y-5">
-                    <div>
-                      <h3 className="text-xl font-black mb-0.5">Masjid Identity</h3>
-                      <p className="text-zinc-500 text-sm">Your name and public URL</p>
+                <div className="space-y-5">
+                  <div className="bg-zinc-900/60 border border-white/5 rounded-2xl overflow-hidden">
+                    <div className="px-5 py-3 border-b border-white/5">
+                      <span className="text-xs font-black uppercase tracking-widest text-zinc-500">Identity</span>
                     </div>
-                    <div>
-                      <label className={labelCls}>Masjid / Academy Name</label>
-                      <input className={inputCls} value={generalSettings.masjidName} onChange={(e) => setGeneralSettings({ ...generalSettings, masjidName: e.target.value })} placeholder="e.g., Toronto Hifz Academy" />
-                    </div>
-                    <div>
-                      <label className={labelCls}>Subdomain</label>
-                      <div className="flex items-center">
-                        <input className={inputCls + " rounded-r-none border-r-0"} value={generalSettings.subdomain} onChange={(e) => setGeneralSettings({ ...generalSettings, subdomain: e.target.value })} placeholder="torontohifz" />
-                        <div className="px-4 py-3 bg-zinc-800 border-2 border-white/10 border-l-0 rounded-r-xl text-zinc-500 font-bold text-sm whitespace-nowrap">.jam3ah.app</div>
+                    <div className="p-5 space-y-4">
+                      <div>
+                        <label className={labelCls}>Masjid / Academy Name</label>
+                        <LocalInput className={inputCls} value={generalSettings.masjidName} onCommit={v => setGeneralSettings({ ...generalSettings, masjidName: v })} placeholder="e.g., Toronto Hifz Academy" />
                       </div>
-                    </div>
-                    <div>
-                      <label className={labelCls}>Website</label>
-                      <input className={inputCls} value={generalSettings.website} onChange={(e) => setGeneralSettings({ ...generalSettings, website: e.target.value })} placeholder="www.yourdomain.ca" />
+                      <div>
+                        <label className={labelCls}>Subdomain</label>
+                        <div className="flex items-center">
+                          <LocalInput className={inputCls + " rounded-r-none border-r-0"} value={generalSettings.subdomain} onCommit={v => setGeneralSettings({ ...generalSettings, subdomain: v })} placeholder="torontohifz" />
+                          <div className="px-4 py-3 bg-zinc-800 border-2 border-white/10 border-l-0 rounded-r-xl text-zinc-500 font-bold text-sm whitespace-nowrap">.jam3ah.app</div>
+                        </div>
+                      </div>
+                      <div>
+                        <label className={labelCls}>Website</label>
+                        <LocalInput className={inputCls} value={generalSettings.website} onCommit={v => setGeneralSettings({ ...generalSettings, website: v })} placeholder="www.yourdomain.ca" />
+                      </div>
                     </div>
                   </div>
 
-                  <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-7 flex flex-col space-y-5">
-                    <div>
-                      <h3 className="text-xl font-black mb-0.5">Contact Information</h3>
-                      <p className="text-zinc-500 text-sm">Shown on your public site</p>
+                  <div className="bg-zinc-900/60 border border-white/5 rounded-2xl overflow-hidden">
+                    <div className="px-5 py-3 border-b border-white/5">
+                      <span className="text-xs font-black uppercase tracking-widest text-zinc-500">Contact</span>
                     </div>
-                    <div>
-                      <label className={labelCls}>Address</label>
-                      <input className={inputCls} value={generalSettings.address} onChange={(e) => setGeneralSettings({ ...generalSettings, address: e.target.value })} placeholder="123 Main St, City, Province" />
-                    </div>
-                    <div>
-                      <label className={labelCls}>Phone Number</label>
-                      <input className={inputCls} value={generalSettings.phone} onChange={(e) => setGeneralSettings({ ...generalSettings, phone: e.target.value })} placeholder="+1 (416) 555-0000" />
-                    </div>
-                    <div>
-                      <label className={labelCls}>Email Address</label>
-                      <input className={inputCls} value={generalSettings.email} onChange={(e) => setGeneralSettings({ ...generalSettings, email: e.target.value })} placeholder="info@masjid.ca" />
+                    <div className="p-5 space-y-4">
+                      <div>
+                        <label className={labelCls}>Address</label>
+                        <LocalInput className={inputCls} value={generalSettings.address} onCommit={v => setGeneralSettings({ ...generalSettings, address: v })} placeholder="123 Main St, City, Province" />
+                      </div>
+                      <div>
+                        <label className={labelCls}>Phone</label>
+                        <LocalInput className={inputCls} value={generalSettings.phone} onCommit={v => setGeneralSettings({ ...generalSettings, phone: v })} placeholder="+1 (416) 555-0000" />
+                      </div>
+                      <div>
+                        <label className={labelCls}>Email</label>
+                        <LocalInput className={inputCls} value={generalSettings.email} onCommit={v => setGeneralSettings({ ...generalSettings, email: v })} placeholder="info@masjid.ca" />
+                      </div>
                     </div>
                   </div>
+
+                  <button onClick={handleSaveSettings} className={`w-full py-3.5 rounded-xl font-black ${theme.btn} transition-all hover:scale-[1.01]`}>
+                    Save Profile
+                  </button>
                 </div>
+              </div>
+            )}
 
-                {/* Row 2: Social + Preview */}
-                <div className="grid grid-cols-2 gap-6 items-stretch">
-                  <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-7 flex flex-col space-y-4">
-                    <div>
-                      <h3 className="text-xl font-black mb-0.5">Social Media</h3>
-                      <p className="text-zinc-500 text-sm">Displayed on your public website</p>
-                    </div>
-                    {[
-                      { key: "instagram", label: "Instagram", prefix: "@", placeholder: "yourmasjid", icon: "M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069z" },
-                      { key: "facebook", label: "Facebook", prefix: "fb.com/", placeholder: "yourmasjid", icon: "M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" },
-                      { key: "twitter", label: "X / Twitter", prefix: "@", placeholder: "yourmasjid", icon: "M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.741l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" },
-                      { key: "youtube", label: "YouTube", prefix: "youtube.com/", placeholder: "YourMasjid", icon: "M23.498 6.186a3.016 3.016 0 00-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 00.502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 002.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 002.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" },
-                      { key: "whatsapp", label: "WhatsApp", prefix: "", placeholder: "+1 416-555-0000", icon: "M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" },
-                    ].map((s) => (
-                      <div key={s.key} className="flex items-center gap-3">
-                        <div className="w-9 h-9 bg-zinc-800 rounded-xl flex items-center justify-center shrink-0">
-                          <svg className="w-4 h-4 text-zinc-400" fill="currentColor" viewBox="0 0 24 24"><path d={s.icon} /></svg>
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <label className={labelCls}>{s.label}</label>
-                          <div className="flex items-center">
-                            {s.prefix && <span className="px-3 py-3 bg-zinc-800 border-2 border-r-0 border-white/10 rounded-l-xl text-zinc-500 font-bold text-xs whitespace-nowrap">{s.prefix}</span>}
-                            <input className={`${inputCls} ${s.prefix ? "rounded-l-none border-l-0" : ""}`}
-                              value={(generalSettings as any)[s.key]}
-                              onChange={(e) => setGeneralSettings({ ...generalSettings, [s.key]: e.target.value })}
-                              placeholder={s.placeholder} />
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="flex flex-col gap-5">
-                    {/* Live preview */}
-                    <div className={`rounded-2xl overflow-hidden border-2 ${theme.accentBorder} flex-1`}>
-                      <div className={`px-5 py-3 border-b ${theme.accentBorder} flex items-center gap-3`} style={{ background: `${theme.hex}15` }}>
-                        <div className={`w-8 h-8 ${theme.iconBg} rounded-lg flex items-center justify-center shrink-0`}>
-                          <CrescentIcon className={`w-4 h-4 ${theme.iconColor}`} />
-                        </div>
-                        <div>
-                          <div className="font-black text-sm text-white">{generalSettings.masjidName || "Your Masjid"}</div>
-                          <div className={`text-xs font-bold ${theme.accent}`}>{generalSettings.subdomain || "yourmasjid"}.jam3ah.app</div>
-                        </div>
-                      </div>
-                      <div className="p-5 bg-zinc-900 space-y-2.5">
-                        {generalSettings.address && (
-                          <div className="flex items-start gap-2 text-sm text-zinc-400">
-                            <Icon d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" className="w-4 h-4 text-zinc-500 shrink-0 mt-0.5" />
-                            {generalSettings.address}
-                          </div>
-                        )}
-                        {generalSettings.phone && (
-                          <div className="flex items-center gap-2 text-sm text-zinc-400">
-                            <Icon d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" className="w-4 h-4 text-zinc-500 shrink-0" />
-                            {generalSettings.phone}
-                          </div>
-                        )}
-                        {generalSettings.email && (
-                          <div className="flex items-center gap-2 text-sm text-zinc-400">
-                            <Icon d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" className="w-4 h-4 text-zinc-500 shrink-0" />
-                            {generalSettings.email}
-                          </div>
-                        )}
-                        {!generalSettings.address && !generalSettings.phone && !generalSettings.email && (
-                          <p className="text-zinc-600 text-sm text-center py-3">Fill in your details to see a preview</p>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Profile completeness */}
-                    <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-5">
-                      <div className="text-xs font-black uppercase tracking-widest mb-3 text-zinc-500">Profile Completeness</div>
-                      <div className="grid grid-cols-2 gap-x-6">
-                        {[
-                          { label: "Masjid Name", done: !!generalSettings.masjidName },
-                          { label: "Subdomain",   done: !!generalSettings.subdomain },
-                          { label: "Address",     done: !!generalSettings.address },
-                          { label: "Phone",       done: !!generalSettings.phone },
-                          { label: "Email",       done: !!generalSettings.email },
-                          { label: "Social Media",done: !!(generalSettings.instagram || generalSettings.facebook || generalSettings.twitter) },
-                        ].map((item) => (
-                          <div key={item.label} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
-                            <span className="text-sm text-zinc-400">{item.label}</span>
-                            {item.done
-                              ? <div className={`flex items-center gap-1 ${theme.accent}`}><Icon d="M5 13l4 4L19 7" className="w-3 h-3" /><span className="text-xs font-bold">Done</span></div>
-                              : <span className="text-xs text-zinc-600 font-bold">Missing</span>}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
+            {/* ── SOCIAL MEDIA ── */}
+            {settingsTab === "social" && (
+              <div className="max-w-xl">
+                <div className="mb-7">
+                  <h2 className="text-2xl font-black mb-1">Social Media</h2>
+                  <p className="text-zinc-500 text-sm">Links displayed on your public website</p>
                 </div>
-
-                <button onClick={handleSaveSettings} className={`w-full py-4 rounded-xl font-black text-lg ${theme.btn} transition-all hover:scale-[1.01]`}>
-                  Save General Settings
+                <div className="bg-zinc-900/60 border border-white/5 rounded-2xl overflow-hidden">
+                  {[
+                    { key: "instagram", label: "Instagram",  prefix: "instagram.com/", placeholder: "yourmasjid",    icon: "M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069z" },
+                    { key: "facebook",  label: "Facebook",   prefix: "facebook.com/",  placeholder: "yourmasjid",    icon: "M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" },
+                    { key: "twitter",   label: "X / Twitter", prefix: "x.com/",         placeholder: "yourmasjid",    icon: "M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.741l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" },
+                    { key: "youtube",   label: "YouTube",    prefix: "youtube.com/@",  placeholder: "YourMasjid",    icon: "M23.498 6.186a3.016 3.016 0 00-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 00.502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 002.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 002.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" },
+                    { key: "whatsapp",  label: "WhatsApp",   prefix: "",               placeholder: "+1 416-555-0000", icon: "M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" },
+                  ].map((s, i, arr) => (
+                    <div key={s.key} className={`flex items-center gap-4 p-5 ${i < arr.length - 1 ? "border-b border-white/5" : ""}`}>
+                      <div className="w-9 h-9 bg-zinc-800 rounded-xl flex items-center justify-center shrink-0">
+                        <svg className="w-4 h-4 text-zinc-400" fill="currentColor" viewBox="0 0 24 24"><path d={s.icon} /></svg>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <label className={labelCls}>{s.label}</label>
+                        <div className="flex items-center">
+                          {s.prefix && <span className="px-3 py-3 bg-zinc-800 border-2 border-r-0 border-white/10 rounded-l-xl text-zinc-500 font-bold text-xs whitespace-nowrap">{s.prefix}</span>}
+                          <LocalInput className={`${inputCls} ${s.prefix ? "rounded-l-none border-l-0" : ""}`}
+                            value={(generalSettings as any)[s.key] || ""}
+                            onCommit={v => setGeneralSettings({ ...generalSettings, [s.key]: v })}
+                            placeholder={s.placeholder} />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={handleSaveSettings} className={`w-full mt-5 py-3.5 rounded-xl font-black ${theme.btn} transition-all hover:scale-[1.01]`}>
+                  Save Social Links
                 </button>
               </div>
             )}
@@ -2172,150 +2412,64 @@ const Dashboard: React.FC = () => {
             {settingsTab === "prayer" && (
               <div className="space-y-6">
 
-                {/* Row 1: Location (full width) */}
+                {/* ── Location ── */}
                 <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-7">
                   <h3 className="text-xl font-black mb-1">Location</h3>
-                  <p className="text-zinc-500 text-sm mb-6">Set your masjid's location for accurate prayer time calculation</p>
-                  <div className="grid grid-cols-4 gap-4">
-                    <div>
-                      <label className={labelCls}>City</label>
-                      <input className={inputCls} value={prayerSettings.city} onChange={(e) => setPrayerSettings({ ...prayerSettings, city: e.target.value })} placeholder="Toronto" />
-                    </div>
-                    <div>
-                      <label className={labelCls}>Country</label>
-                      <input className={inputCls} value={prayerSettings.country} onChange={(e) => setPrayerSettings({ ...prayerSettings, country: e.target.value })} placeholder="Canada" />
-                    </div>
-                    <div className="col-span-2">
-                      <label className={labelCls}>Timezone</label>
-                      <select className={selectCls} value={prayerSettings.timezone} onChange={(e) => setPrayerSettings({ ...prayerSettings, timezone: e.target.value })}>
-                        {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
-                      </select>
-                    </div>
+                  <p className="text-zinc-500 text-sm mb-6">Coordinates used to calculate prayer times via your backend</p>
+                  <div className="grid grid-cols-3 gap-4">
                     <div>
                       <label className={labelCls}>Latitude</label>
-                      <input className={inputCls} type="number" step="0.000001" value={prayerSettings.latitude} onChange={(e) => setPrayerSettings({ ...prayerSettings, latitude: e.target.value })} placeholder="43.651070" />
+                      <LocalInput className={inputCls} type="number" step="0.000001" value={prayerSettings.latitude}
+                        onCommit={v => setPrayerSettings(p => ({ ...p, latitude: v }))} placeholder="43.651070" />
                     </div>
                     <div>
                       <label className={labelCls}>Longitude</label>
-                      <input className={inputCls} type="number" step="0.000001" value={prayerSettings.longitude} onChange={(e) => setPrayerSettings({ ...prayerSettings, longitude: e.target.value })} placeholder="-79.347015" />
+                      <LocalInput className={inputCls} type="number" step="0.000001" value={prayerSettings.longitude}
+                        onCommit={v => setPrayerSettings(p => ({ ...p, longitude: v }))} placeholder="-79.347015" />
                     </div>
                     <div>
-                      <label className={labelCls}>Elevation (m)</label>
-                      <input className={inputCls} type="number" value={prayerSettings.elevation} onChange={(e) => setPrayerSettings({ ...prayerSettings, elevation: e.target.value })} placeholder="76" />
+                      <label className={labelCls}>Timezone</label>
+                      <select className={selectCls} value={prayerSettings.timezone}
+                        onChange={e => setPrayerSettings(p => ({ ...p, timezone: e.target.value }))}>
+                        {TIMEZONES.map(tz => <option key={tz} value={tz}>{tz}</option>)}
+                      </select>
                     </div>
                   </div>
                 </div>
 
-                {/* Row 2: Calculation + Adjustments side by side */}
-                <div className="grid grid-cols-2 gap-6 items-stretch">
-
-                  {/* Calculation Settings */}
-                  <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-7 space-y-5 flex flex-col">
-                    <div>
-                      <h3 className="text-xl font-black mb-0.5">Calculation</h3>
-                      <p className="text-zinc-500 text-sm">How prayer times are derived astronomically</p>
-                    </div>
-
-                    <div>
-                      <label className={labelCls}>Method</label>
-                      <select className={selectCls} value={prayerSettings.method} onChange={(e) => setPrayerSettings({ ...prayerSettings, method: e.target.value })}>
-                        {CALC_METHODS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-                      </select>
-                      {prayerSettings.method !== "Custom" && (() => {
-                        const m = CALC_METHODS.find(x => x.value === prayerSettings.method)!;
-                        return <p className="text-zinc-600 text-xs mt-1.5">Fajr {m.fajr}° · Isha {m.isha > 0 ? `${m.isha}°` : "90 min after Maghrib"}</p>;
-                      })()}
-                      {prayerSettings.method === "Custom" && (
-                        <div className="mt-3 grid grid-cols-2 gap-3">
-                          <div>
-                            <label className={labelCls}>Fajr Angle (°)</label>
-                            <input className={inputCls} type="number" step="0.1" value={prayerSettings.customFajrAngle} onChange={(e) => setPrayerSettings({ ...prayerSettings, customFajrAngle: e.target.value })} />
-                          </div>
-                          <div>
-                            <label className={labelCls}>Isha Angle (°)</label>
-                            <input className={inputCls} type="number" step="0.1" value={prayerSettings.customIshaAngle} onChange={(e) => setPrayerSettings({ ...prayerSettings, customIshaAngle: e.target.value })} />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className={labelCls}>Higher Latitude Rule</label>
-                      <p className="text-zinc-600 text-xs mb-2">Needed for Toronto, London, Oslo — where standard angles fail in summer</p>
-                      <select className={selectCls} value={prayerSettings.higherLatRule} onChange={(e) => setPrayerSettings({ ...prayerSettings, higherLatRule: e.target.value })}>
-                        <option value="None">None — equatorial regions only</option>
-                        <option value="Midnight">Midnight — half the night</option>
-                        <option value="OneSeventh">One-Seventh — 1/7 of the night</option>
-                        <option value="AngleBased">Angle-Based — recommended for Canada &amp; UK</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className={labelCls}>Asr Madhab</label>
-                      <div className="flex gap-2 mt-1">
-                        {[
-                          { value: "Standard", label: "Standard", sub: "Shafi / Maliki / Hanbali" },
-                          { value: "Hanafi",   label: "Hanafi",   sub: "Shadow = 2× height" },
-                        ].map((opt) => (
-                          <button key={opt.value} onClick={() => setPrayerSettings({ ...prayerSettings, asrMethod: opt.value })}
-                            className={`flex-1 py-3 px-4 rounded-xl border-2 text-left transition-all ${prayerSettings.asrMethod === opt.value ? `${theme.accentBg} ${theme.accentBorder}` : "border-white/5 bg-zinc-800/40 hover:border-white/10"}`}>
-                            <div className={`font-black text-sm ${prayerSettings.asrMethod === opt.value ? "text-white" : "text-zinc-300"}`}>{opt.label}</div>
-                            <div className="text-zinc-600 text-xs mt-0.5">{opt.sub}</div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className={labelCls}>Midnight Mode</label>
-                      <div className="flex gap-2 mt-1">
-                        {[
-                          { value: "Standard", label: "Standard", sub: "Sunset → Sunrise" },
-                          { value: "Jafari",   label: "Jafari",   sub: "Sunset → Fajr" },
-                        ].map((opt) => (
-                          <button key={opt.value} onClick={() => setPrayerSettings({ ...prayerSettings, midnightMode: opt.value })}
-                            className={`flex-1 py-3 px-4 rounded-xl border-2 text-left transition-all ${prayerSettings.midnightMode === opt.value ? `${theme.accentBg} ${theme.accentBorder}` : "border-white/5 bg-zinc-800/40 hover:border-white/10"}`}>
-                            <div className={`font-black text-sm ${prayerSettings.midnightMode === opt.value ? "text-white" : "text-zinc-300"}`}>{opt.label}</div>
-                            <div className="text-zinc-600 text-xs mt-0.5">{opt.sub}</div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Manual Adjustments */}
-                  <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-7 space-y-5 flex flex-col">
-                    <div>
-                      <h3 className="text-xl font-black mb-0.5">Manual Adjustments</h3>
-                      <p className="text-zinc-500 text-sm">Shift any prayer earlier or later by minutes</p>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      {[
-                        { key: "fajrAdjust",    label: "Fajr" },
-                        { key: "sunriseAdjust", label: "Sunrise" },
-                        { key: "dhuhrAdjust",   label: "Dhuhr" },
-                        { key: "asrAdjust",     label: "Asr" },
-                        { key: "maghribAdjust", label: "Maghrib" },
-                        { key: "ishaAdjust",    label: "Isha" },
-                      ].map((f) => (
-                        <div key={f.key}>
-                          <label className={labelCls}>{f.label} (min)</label>
-                          <input className={inputCls} type="number" value={(prayerSettings as any)[f.key]}
-                            onChange={(e) => setPrayerSettings({ ...prayerSettings, [f.key]: e.target.value })} placeholder="0" />
-                        </div>
-                      ))}
-                    </div>
-                    <div className="pt-4 border-t border-white/5">
-                      <label className={labelCls}>Imsak (min before Fajr)</label>
-                      <p className="text-zinc-600 text-xs mb-3">Eating cutoff before Fajr — typically 10 min</p>
-                      <input className={inputCls} type="number" value={prayerSettings.imsakMinutes}
-                        onChange={(e) => setPrayerSettings({ ...prayerSettings, imsakMinutes: e.target.value })} placeholder="10" />
-                    </div>
-                  </div>
-
+                {/* ── Calculation Method ── */}
+                <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-7">
+                  <h3 className="text-xl font-black mb-1">Calculation Method</h3>
+                  <p className="text-zinc-500 text-sm mb-6">School of thought used to derive prayer angles</p>
+                  <select className={selectCls} value={prayerSettings.method}
+                    onChange={e => setPrayerSettings(p => ({ ...p, method: e.target.value }))}>
+                    {CALC_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                  </select>
                 </div>
 
-                {/* Multiple Jamaats */}
+                {/* ── Generate ── */}
+                <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-7">
+                  <div className="flex items-center justify-between mb-1">
+                    <h3 className="text-xl font-black">Generate Prayer Times</h3>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => setSelectedYear(y => y - 1)} className="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-white transition-colors text-sm font-black">‹</button>
+                      <span className="text-lg font-black text-white w-14 text-center">{selectedYear}</span>
+                      <button onClick={() => setSelectedYear(y => y + 1)} className="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-white transition-colors text-sm font-black">›</button>
+                    </div>
+                  </div>
+                  <p className="text-zinc-500 text-sm mb-6">Send coordinates &amp; method to your backend and save all 365 days to the database</p>
+                  {generateError && <div className="mb-4 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm font-bold">{generateError}</div>}
+                  {generateSuccess && <div className="mb-4 px-4 py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm font-bold">{generateSuccess}</div>}
+                  <button onClick={handleGeneratePrayerTimes} disabled={generating}
+                    className={`w-full py-4 rounded-xl font-black text-lg transition-all ${generating ? "bg-zinc-800 text-zinc-500 cursor-wait border border-white/5" : theme.btn + " hover:scale-[1.01]"}`}>
+                    {generating
+                      ? <span className="flex items-center justify-center gap-2"><svg className="animate-spin w-5 h-5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> Fetching from backend…</span>
+                      : `Generate ${selectedYear} Prayer Times`
+                    }
+                  </button>
+                </div>
+
+                {/* ── Multiple Jamaats ── */}
                 <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-7">
                   <h3 className="text-xl font-black mb-1">Multiple Jamaats</h3>
                   <p className="text-zinc-500 text-sm mb-6">Enable 2nd and 3rd jamaat for Fajr and Maghrib — controls appear in the Adhan &amp; Iqama batch update card.</p>
@@ -2327,9 +2481,7 @@ const Dashboard: React.FC = () => {
                       { key: "maghrib3" as const, label: "Maghrib", jamaat: "3rd Jamaat" },
                     ]).map(({ key, label, jamaat }) => (
                       <button key={key} onClick={() => setJamaatSettings(prev => ({ ...prev, [key]: !prev[key] }))}
-                        className={`flex items-center justify-between p-4 rounded-xl border-2 transition-all text-left ${
-                          jamaatSettings[key] ? `${theme.accentBg} ${theme.accentBorder}` : "border-white/5 bg-zinc-800/40 hover:border-white/10"
-                        }`}>
+                        className={`flex items-center justify-between p-4 rounded-xl border-2 transition-all text-left ${jamaatSettings[key] ? `${theme.accentBg} ${theme.accentBorder}` : "border-white/5 bg-zinc-800/40 hover:border-white/10"}`}>
                         <div>
                           <div className={`font-black text-sm ${jamaatSettings[key] ? "text-white" : "text-zinc-300"}`}>{label} — {jamaat}</div>
                           <div className="text-zinc-500 text-xs mt-0.5">{jamaatSettings[key] ? "Enabled" : "Disabled"}</div>
@@ -2342,22 +2494,17 @@ const Dashboard: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Times Source */}
+                {/* ── Times Source ── */}
                 <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-7">
                   <h3 className="text-xl font-black mb-1">Times Source</h3>
                   <p className="text-zinc-500 text-sm mb-6">Choose how prayer start times are populated</p>
                   <div className="grid grid-cols-2 gap-4">
                     {[
                       { k: "backend" as const, label: "Auto-calculate", sub: "Computed from location & method settings", icon: "M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18" },
-                      { k: "excel"   as const, label: "Upload Excel",   sub: "Import from a spreadsheet file",           icon: "M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" },
+                      { k: "excel" as const,   label: "Upload Excel",   sub: "Import from a spreadsheet file",           icon: "M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" },
                     ].map(opt => (
-                      <button key={opt.k}
-                        onClick={() => opt.k !== prayerSource && setPendingSource(opt.k)}
-                        className={`flex items-start gap-4 p-5 rounded-xl border-2 text-left transition-all ${
-                          prayerSource === opt.k
-                            ? `${theme.accentBg} ${theme.accentBorder}`
-                            : "border-white/5 bg-zinc-800/40 hover:border-white/10"
-                        }`}>
+                      <button key={opt.k} onClick={() => opt.k !== prayerSource && setPendingSource(opt.k)}
+                        className={`flex items-start gap-4 p-5 rounded-xl border-2 text-left transition-all ${prayerSource === opt.k ? `${theme.accentBg} ${theme.accentBorder}` : "border-white/5 bg-zinc-800/40 hover:border-white/10"}`}>
                         <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${prayerSource === opt.k ? theme.iconBg : "bg-zinc-700/40"}`}>
                           <Icon d={opt.icon} className={`w-5 h-5 ${prayerSource === opt.k ? theme.iconColor : "text-zinc-500"}`} />
                         </div>
@@ -2370,14 +2517,11 @@ const Dashboard: React.FC = () => {
                   </div>
                 </div>
 
-                <button onClick={handleSaveSettings} className={`w-full py-4 rounded-xl font-black text-lg ${theme.btn} transition-all hover:scale-[1.01]`}>
-                  Save Prayer Settings
-                </button>
               </div>
             )}
 
-            {/* ── THEME SETTINGS ── */}
-            {settingsTab === "theme" && (
+            {/* ── APPEARANCE SETTINGS ── */}
+            {settingsTab === "appearance" && (
               <div className="grid grid-cols-2 gap-6 items-stretch">
 
                 {/* Left: picker */}
@@ -2459,42 +2603,10 @@ const Dashboard: React.FC = () => {
 
               </div>
             )}
+            </div>
           </div>
         )}
       </div>
-
-      {/* ── Event Modal ── */}
-      {showEventModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="w-full max-w-md bg-zinc-900 border border-white/10 rounded-2xl p-8">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-2xl font-black">{editingEvent ? "Edit Event" : "Create Event"}</h2>
-              <button onClick={() => setShowEventModal(false)} className="text-zinc-500 hover:text-white transition-colors">
-                <Icon d="M6 18L18 6M6 6l12 12" />
-              </button>
-            </div>
-            <div className="space-y-4">
-              {[
-                { label: "Title *", type: "text", placeholder: "Event title", key: "title" as keyof EventForm },
-                { label: "Description", type: "text", placeholder: "Brief description", key: "description" as keyof EventForm },
-                { label: "Date *", type: "date", placeholder: "", key: "date" as keyof EventForm },
-                { label: "Time *", type: "time", placeholder: "", key: "time" as keyof EventForm },
-              ].map((f) => (
-                <div key={f.key}>
-                  <label className={labelCls}>{f.label}</label>
-                  <input type={f.type} placeholder={f.placeholder} value={eventForm[f.key]}
-                    onChange={(e) => setEventForm({ ...eventForm, [f.key]: e.target.value })}
-                    className={inputCls} />
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-3 mt-6">
-              <button onClick={() => setShowEventModal(false)} className="flex-1 py-3 rounded-xl font-bold border border-white/10 text-zinc-400 hover:bg-white/5 transition-all">Cancel</button>
-              <button onClick={handleEventSubmit} className={`flex-1 py-3 ${theme.btn} rounded-xl font-black transition-all`}>{editingEvent ? "Save Changes" : "Create Event"}</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Excel Column Mapping Modal ── */}
       {xlsxPreview && (() => {
@@ -2503,22 +2615,6 @@ const Dashboard: React.FC = () => {
         const previewRows = rows.slice(xlsxPreview.headerRowIdx + 1).filter(r => r.some(c => c)).slice(0, 5);
         const colOpts = ["", ...headers];
 
-        const REQUIRED_FIELDS = [
-          { key: "date",    label: "Date",         hint: "Full date column (YYYY-MM-DD, DD/MM/YYYY, etc.)" },
-          { key: "day",     label: "Day #",         hint: "Day-of-month number (1–31). Used if no full date column." },
-          { key: "fajr",    label: "Fajr",          hint: "Fajr start / adhan time" },
-          { key: "dhuhr",   label: "Dhuhr / Zuhr",  hint: "Dhuhr start time" },
-          { key: "asr",     label: "Asr",           hint: "Asr start time" },
-          { key: "maghrib", label: "Maghrib",       hint: "Maghrib start time" },
-          { key: "isha",    label: "Isha",          hint: "Isha start time" },
-        ];
-        const IQAMA_FIELDS = [
-          { key: "fajr_iqama",    label: "Fajr Iqama" },
-          { key: "dhuhr_iqama",   label: "Dhuhr Iqama" },
-          { key: "asr_iqama",     label: "Asr Iqama" },
-          { key: "maghrib_iqama", label: "Maghrib Iqama" },
-          { key: "isha_iqama",    label: "Isha Iqama" },
-        ];
         const JUMMAH_FIELDS = [
           { key: "jummah1", label: "Jummah 1" },
           { key: "jummah2", label: "Jummah 2" },

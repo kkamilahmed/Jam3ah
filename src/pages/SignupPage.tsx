@@ -2,6 +2,9 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
+const inputCls = "w-full px-4 py-3 bg-zinc-800/50 border border-white/10 rounded-xl font-medium text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 transition-colors";
+const labelCls = "block text-sm font-bold mb-1.5 text-zinc-300";
+
 const SignupPage: React.FC = () => {
   const navigate = useNavigate();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -10,7 +13,11 @@ const SignupPage: React.FC = () => {
 
   const [formData, setFormData] = useState({
     masjidName: "",
-    address: "",
+    street: "",
+    city: "",
+    state: "",
+    postalCode: "",
+    country: "",
     masjidPhone: "",
     masjidEmail: "",
     inchargeName: "",
@@ -22,8 +29,8 @@ const SignupPage: React.FC = () => {
     if (token) navigate("/home", { replace: true });
   }, []);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+  const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormData(p => ({ ...p, [field]: e.target.value }));
     setError("");
   };
 
@@ -34,10 +41,11 @@ const SignupPage: React.FC = () => {
     }
     setIsSubmitting(true);
     setError("");
+    const address = [formData.street, formData.city, formData.state, formData.postalCode, formData.country].filter(Boolean).join(", ");
     try {
       const { error: dbError } = await supabase.from("masjid_registrations").insert({
         masjid_name:    formData.masjidName,
-        address:        formData.address,
+        address,
         masjid_phone:   formData.masjidPhone,
         masjid_email:   formData.masjidEmail,
         incharge_name:  formData.inchargeName,
@@ -46,7 +54,7 @@ const SignupPage: React.FC = () => {
       });
       if (dbError) throw new Error(dbError.message);
       setIsSuccess(true);
-      setFormData({ masjidName: "", address: "", masjidPhone: "", masjidEmail: "", inchargeName: "", inchargePhone: "" });
+      setFormData({ masjidName: "", street: "", city: "", state: "", postalCode: "", country: "", masjidPhone: "", masjidEmail: "", inchargeName: "", inchargePhone: "" });
     } catch (err: unknown) {
       setError((err as Error).message || "Failed to submit registration. Please try again.");
     } finally {
@@ -111,6 +119,7 @@ const SignupPage: React.FC = () => {
           </div>
 
           <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-8 space-y-8">
+
             {/* Masjid Info */}
             <div>
               <h2 className="text-lg font-black mb-5 flex items-center gap-2">
@@ -119,29 +128,45 @@ const SignupPage: React.FC = () => {
               </h2>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-bold mb-1.5 text-zinc-300">Masjid Name <span className="text-red-400">*</span></label>
-                  <input type="text" name="masjidName" value={formData.masjidName} onChange={handleChange}
-                    className="w-full px-4 py-3 bg-zinc-800/50 border border-white/10 rounded-xl font-medium text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 transition-colors"
-                    placeholder="e.g. Al-Noor Masjid" />
+                  <label className={labelCls}>Masjid Name <span className="text-red-400">*</span></label>
+                  <input type="text" value={formData.masjidName} onChange={set("masjidName")} className={inputCls} placeholder="e.g. Al-Noor Masjid" />
                 </div>
+
                 <div>
-                  <label className="block text-sm font-bold mb-1.5 text-zinc-300">Address</label>
-                  <textarea name="address" value={formData.address} onChange={handleChange} rows={2}
-                    className="w-full px-4 py-3 bg-zinc-800/50 border border-white/10 rounded-xl font-medium text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 transition-colors resize-none"
-                    placeholder="123 Main St, Toronto, ON" />
+                  <label className={labelCls}>Street Address</label>
+                  <input type="text" value={formData.street} onChange={set("street")} className={inputCls} placeholder="20 Overlea Blvd" />
                 </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-bold mb-1.5 text-zinc-300">Masjid Phone</label>
-                    <input type="tel" name="masjidPhone" value={formData.masjidPhone} onChange={handleChange}
-                      className="w-full px-4 py-3 bg-zinc-800/50 border border-white/10 rounded-xl font-medium text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 transition-colors"
-                      placeholder="+1 (555) 000-0000" />
+                    <label className={labelCls}>City</label>
+                    <input type="text" value={formData.city} onChange={set("city")} className={inputCls} placeholder="Toronto" />
                   </div>
                   <div>
-                    <label className="block text-sm font-bold mb-1.5 text-zinc-300">Masjid Email <span className="text-red-400">*</span></label>
-                    <input type="email" name="masjidEmail" value={formData.masjidEmail} onChange={handleChange}
-                      className="w-full px-4 py-3 bg-zinc-800/50 border border-white/10 rounded-xl font-medium text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 transition-colors"
-                      placeholder="info@masjid.ca" />
+                    <label className={labelCls}>State / Province</label>
+                    <input type="text" value={formData.state} onChange={set("state")} className={inputCls} placeholder="Ontario" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className={labelCls}>Postal / ZIP Code</label>
+                    <input type="text" value={formData.postalCode} onChange={set("postalCode")} className={inputCls} placeholder="M4H 1B1" />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Country</label>
+                    <input type="text" value={formData.country} onChange={set("country")} className={inputCls} placeholder="Canada" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className={labelCls}>Masjid Phone</label>
+                    <input type="tel" value={formData.masjidPhone} onChange={set("masjidPhone")} className={inputCls} placeholder="+1 (555) 000-0000" />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Masjid Email <span className="text-red-400">*</span></label>
+                    <input type="email" value={formData.masjidEmail} onChange={set("masjidEmail")} className={inputCls} placeholder="info@masjid.ca" />
                   </div>
                 </div>
               </div>
@@ -155,16 +180,12 @@ const SignupPage: React.FC = () => {
               </h2>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-bold mb-1.5 text-zinc-300">Full Name <span className="text-red-400">*</span></label>
-                  <input type="text" name="inchargeName" value={formData.inchargeName} onChange={handleChange}
-                    className="w-full px-4 py-3 bg-zinc-800/50 border border-white/10 rounded-xl font-medium text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 transition-colors"
-                    placeholder="Sheikh Abdullah" />
+                  <label className={labelCls}>Full Name <span className="text-red-400">*</span></label>
+                  <input type="text" value={formData.inchargeName} onChange={set("inchargeName")} className={inputCls} placeholder="Sheikh Abdullah" />
                 </div>
                 <div>
-                  <label className="block text-sm font-bold mb-1.5 text-zinc-300">Phone Number</label>
-                  <input type="tel" name="inchargePhone" value={formData.inchargePhone} onChange={handleChange}
-                    className="w-full px-4 py-3 bg-zinc-800/50 border border-white/10 rounded-xl font-medium text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 transition-colors"
-                    placeholder="+1 (555) 000-0000" />
+                  <label className={labelCls}>Phone Number</label>
+                  <input type="tel" value={formData.inchargePhone} onChange={set("inchargePhone")} className={inputCls} placeholder="+1 (555) 000-0000" />
                 </div>
               </div>
             </div>
