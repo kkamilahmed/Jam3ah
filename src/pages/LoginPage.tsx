@@ -66,6 +66,7 @@ const LoginPage: React.FC = () => {
 
       storage.setItem("masjid_id", masjid.id);
       storage.setItem("masjid_name", masjid.masjid_name);
+      storage.setItem("user_email", authData.user!.email ?? "");
 
       navigate(masjid.onboarding_complete ? "/home" : "/onboarding");
     } catch (err: unknown) {

@@ -45,11 +45,14 @@ if (!$body) {
     exit;
 }
 
-$lat      = isset($body['lat'])      ? (float)  $body['lat']      : null;
-$lng      = isset($body['lng'])      ? (float)  $body['lng']      : null;
-$timezone = isset($body['timezone']) ? (string) $body['timezone'] : 'UTC';
-$method   = isset($body['method'])   ? strtoupper((string) $body['method']) : Method::METHOD_ISNA;
-$year     = isset($body['year'])     ? (int)    $body['year']     : (int) date('Y');
+$lat       = isset($body['lat'])       ? (float)  $body['lat']       : null;
+$lng       = isset($body['lng'])       ? (float)  $body['lng']       : null;
+$timezone  = isset($body['timezone'])  ? (string) $body['timezone']  : 'UTC';
+$method    = isset($body['method'])    ? strtoupper((string) $body['method']) : Method::METHOD_ISNA;
+$year      = isset($body['year'])      ? (int)    $body['year']      : (int) date('Y');
+$elevation = isset($body['elevation']) ? (float)  $body['elevation'] : 0;
+$school    = isset($body['school'])    ? strtoupper((string) $body['school']) : PrayerTimes::SCHOOL_STANDARD;
+$latAdj    = isset($body['latitudeAdjustmentMethod']) ? strtoupper((string) $body['latitudeAdjustmentMethod']) : PrayerTimes::LATITUDE_ADJUSTMENT_METHOD_ANGLE;
 
 if ($lat === null || $lng === null) {
     http_response_code(400);
@@ -78,7 +81,7 @@ $methodMap = [
 $calcMethod = $methodMap[$method] ?? Method::METHOD_ISNA;
 
 try {
-    $pt  = new PrayerTimes($calcMethod);
+    $pt  = new PrayerTimes($calcMethod, $school);
     $tz  = new DateTimeZone($timezone);
     $results = [];
 
@@ -91,8 +94,8 @@ try {
             clone $current,
             $lat,
             $lng,
-            null,
-            PrayerTimes::LATITUDE_ADJUSTMENT_METHOD_ANGLE,
+            $elevation,
+            $latAdj,
             null,
             PrayerTimes::TIME_FORMAT_24H
         );

@@ -4,7 +4,16 @@
       "Bash(npx tsc:*)",
       "Bash(npm run:*)",
       "Bash(\"C:\\\\Users\\\\ayaan\\\\Desktop\\\\Jam3ah-main\\\\.env\":*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(cd \"C:\\\\Users\\\\ayaan\\\\Desktop\\\\Jam3ah-main\" && npm install @dnd-kit/core @dnd-kit/sortable @dnd-kit/utilities 2>&1 | tail -5)",
+      "Bash(cd \"C:\\\\Users\\\\ayaan\\\\Desktop\\\\Jam3ah-main\" && npm ls @dnd-kit/core @dnd-kit/sortable @dnd-kit/utilities 2>&1 | head -10)",
+      "Bash(cd \"C:\\\\Users\\\\ayaan\\\\Desktop\\\\Jam3ah-main\" && rm src/pages/ConsumerPage.tsx src/dashboard/blocks/blockTypes.ts src/dashboard/tabs/PageBuilderTab.tsx && npx tsc --noEmit 2>&1)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(curl:*)",
+      "Bash(gh api:*)",
+      "Bash(npm install:*)",
+      "Bash(grep:*)"
     ]
   }
 }
