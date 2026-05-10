@@ -2,10 +2,11 @@ import React from "react";
 import type { PrayerTime, BatchCell, BatchCell2, BatchConfig, Month } from "../types";
 import { THEMES, type ThemeKey } from "../themes";
 import { to12h, formatTimeInput } from "../utils";
-import { Icon } from "../components/Icon";
 import BatchControl from "../components/BatchControl";
 import DatePicker from "../components/DatePicker";
 import LocalInput from "../components/LocalInput";
+import Select from "../components/Select";
+import useIsMobile from "../../hooks/useIsMobile";
 
 const PRAYER_META = [
   { key: "fajr" as keyof PrayerTime,    label: "Fajr",    arabic: "الفجر" },
@@ -58,8 +59,8 @@ interface PrayerTimesTabProps {
   batchError: string;
   handleBatchApply: () => void;
   jamaatSettings: { fajr2: boolean; fajr3: boolean; maghrib2: boolean; maghrib3: boolean };
-  extraTimings: { fajr: string[]; maghrib: string[]; jummah: string[]; weekendIsha: { enabled: boolean; days: string[]; iqama: string } };
-  setExtraTimings: React.Dispatch<React.SetStateAction<{ fajr: string[]; maghrib: string[]; jummah: string[]; weekendIsha: { enabled: boolean; days: string[]; iqama: string } }>>;
+  extraTimings: { fajr: string[]; maghrib: string[]; jummah: string[]; jummahSlots: [boolean, boolean, boolean]; weekendIsha: { enabled: boolean; days: string[]; iqama: string } };
+  setExtraTimings: React.Dispatch<React.SetStateAction<{ fajr: string[]; maghrib: string[]; jummah: string[]; jummahSlots: [boolean, boolean, boolean]; weekendIsha: { enabled: boolean; days: string[]; iqama: string } }>>;
   // Excel column mapping modal state
   xlsxPreview: {
     sheets: string[];
@@ -83,7 +84,7 @@ interface PrayerTimesTabProps {
 }
 
 const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
-  theme,
+  theme: _theme,
   todayRow,
   prayerSource,
   setPendingSource,
@@ -137,22 +138,139 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
   handleGenerateYear,
   generatingYear,
 }) => {
+  const isMobile = useIsMobile();
+  const [batchOpen, setBatchOpen] = React.useState(false);
+  const [showSummary, setShowSummary] = React.useState(false);
+
+  const buildSummary = () => {
+    const lines: { label: string; value: string; skip?: boolean }[] = [];
+    const prayers = ["fajr", "dhuhr", "asr", "maghrib", "isha"] as const;
+    const labels: Record<string, string> = { fajr: "Fajr", dhuhr: "Dhuhr", asr: "Asr", maghrib: "Maghrib", isha: "Isha" };
+    for (const p of prayers) {
+      const aCell = (batchAdhan as unknown as Record<string, BatchCell>)[p];
+      const iCell = (batchIqama as unknown as Record<string, BatchCell>)[p];
+      const adhanEmpty = aCell.mode === "fixed" && !aCell.fixed;
+      const iqamaEmpty = iCell.mode === "fixed" && !iCell.fixed;
+      lines.push({
+        label: `${labels[p]} Adhan`,
+        value: adhanEmpty ? "—" : aCell.mode === "fixed" ? aCell.fixed : aCell.offset === 0 ? "No change (+0 min)" : `+${aCell.offset} min`,
+        skip: adhanEmpty,
+      });
+      lines.push({
+        label: `${labels[p]} Iqama`,
+        value: iqamaEmpty ? "—" : iCell.mode === "fixed" ? iCell.fixed : `+${iCell.offset} min from adhan`,
+        skip: iqamaEmpty,
+      });
+    }
+    const jummahLines = (["1st", "2nd", "3rd"] as const)
+      .map((lbl, i) => extraTimings.jummahSlots[i] ? { label: `Jummah ${lbl}`, value: extraTimings.jummah[i] || "—", skip: !extraTimings.jummah[i] } : null)
+      .filter(Boolean) as { label: string; value: string; skip: boolean }[];
+    const wishaActive = extraTimings.weekendIsha.iqama && extraTimings.weekendIsha.days.length > 0;
+    const dayCount = Object.values(prayerTimesByMonth).flat().filter(d => d.date >= batchFrom && d.date <= batchTo).length;
+    return { lines, jummahLines, wishaActive, dayCount };
+  };
+
   return (
-    <div className="px-8 py-10">
+    <div style={{ padding: isMobile ? "20px 16px 80px" : "40px 32px", fontFamily: "Manrope, sans-serif", background: "var(--surface-low)", minHeight: "100%" }}>
+
+      {/* ── Batch Apply Summary Modal ── */}
+      {showSummary && (() => {
+        const { lines, jummahLines, wishaActive, dayCount } = buildSummary();
+        const hasAnything = lines.some(l => !l.skip) || jummahLines.some(l => !l.skip) || wishaActive;
+        return (
+          <div style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", backdropFilter: "blur(2px)" }} onClick={() => setShowSummary(false)}>
+            <div style={{ background: "var(--surface)", border: "1px solid var(--outline)", borderRadius: 4, width: 480, maxWidth: "90vw", maxHeight: "80vh", overflow: "auto", fontFamily: "Manrope, sans-serif" }} onClick={e => e.stopPropagation()}>
+              {/* Modal header */}
+              <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--outline-subtle)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", marginBottom: 4 }}>Confirm</div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: "var(--text-max)", letterSpacing: "-0.02em" }}>Prayer Schedule Builder</div>
+                </div>
+                <button onClick={() => setShowSummary(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 4 }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 20 }}>close</span>
+                </button>
+              </div>
+              {/* Date range summary */}
+              <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--outline-subtle)", display: "flex", gap: 24 }}>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", marginBottom: 2 }}>Date range</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--on-surface)" }}>{batchFrom || "—"} → {batchTo || "—"}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", marginBottom: 2 }}>Days affected</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--on-surface)" }}>{dayCount}</div>
+                </div>
+              </div>
+              {/* Changes list */}
+              <div style={{ padding: "16px 24px" }}>
+                {!hasAnything ? (
+                  <p style={{ margin: 0, fontSize: 13, color: "var(--text-ghost)" }}>No changes to apply — all fields are empty.</p>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", marginBottom: 10 }}>Changes</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      {lines.filter(l => !l.skip).map((l, i) => (
+                        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 12px", background: "var(--surface-mid)", borderRadius: 2, border: "1px solid var(--surface-high)" }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--on-surface-variant)" }}>{l.label}</span>
+                          <span style={{ fontSize: 13, fontWeight: 800, color: "var(--accent)" }}>{l.value}</span>
+                        </div>
+                      ))}
+                      {jummahLines.filter(l => !l.skip).map((l, i) => (
+                        <div key={`j${i}`} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 12px", background: "var(--surface-mid)", borderRadius: 2, border: "1px solid var(--accent-border)" }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--on-surface-variant)" }}>{l.label}</span>
+                          <span style={{ fontSize: 13, fontWeight: 800, color: "var(--accent)" }}>{l.value}</span>
+                        </div>
+                      ))}
+                      {wishaActive && (
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 12px", background: "var(--surface-mid)", borderRadius: 2, border: "1px solid var(--surface-high)" }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--on-surface-variant)" }}>Weekend Isha ({extraTimings.weekendIsha.days.map(d => d.charAt(0).toUpperCase() + d.slice(1)).join(", ")})</span>
+                          <span style={{ fontSize: 13, fontWeight: 800, color: "var(--accent)" }}>{extraTimings.weekendIsha.iqama}</span>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+              {/* Footer buttons */}
+              <div style={{ padding: "16px 24px", borderTop: "1px solid var(--outline-subtle)", display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button onClick={() => setShowSummary(false)}
+                  style={{ padding: "8px 20px", borderRadius: 2, fontSize: 13, fontWeight: 700, fontFamily: "Manrope, sans-serif", background: "transparent", border: "1px solid var(--outline)", color: "var(--on-surface-variant)", cursor: "pointer" }}>
+                  Cancel
+                </button>
+                <button disabled={!hasAnything || applyingBatch} onClick={() => { setShowSummary(false); handleBatchApply(); }}
+                  style={{ padding: "8px 20px", borderRadius: 2, fontSize: 13, fontWeight: 700, fontFamily: "Manrope, sans-serif", background: hasAnything ? "var(--accent)" : "var(--surface-high)", border: "none", color: hasAnything ? "var(--accent-text)" : "var(--text-ghost)", cursor: hasAnything ? "pointer" : "not-allowed" }}>
+                  Confirm & Apply
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
 
       {/* ── Header ── */}
-      <div className="flex items-end justify-between mb-8">
+      <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "flex-start" : "flex-end", justifyContent: "space-between", gap: isMobile ? 12 : 0, marginBottom: isMobile ? 20 : 32 }}>
         <div>
-          <div className={`text-xs font-bold uppercase tracking-widest mb-2 ${theme.label}`}>Management</div>
-          <h1 className="text-4xl font-black">Prayer Times</h1>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.15em", marginBottom: 6 }}>Management</div>
+          <h1 style={{ fontSize: isMobile ? 20 : 22, fontWeight: 800, color: "var(--text-max)", margin: 0, letterSpacing: "-0.02em" }}>Prayer Times</h1>
         </div>
-        <div className="flex items-center bg-zinc-900/60 border border-white/8 rounded-xl p-1 gap-1 mb-1">
-          {([{ k: "backend" as const, label: "Auto-calculate" }, { k: "excel" as const, label: "Upload Excel" }]).map(opt => (
+        {/* Source toggle */}
+        <div style={{ display: "flex", alignItems: "center", background: "var(--surface-mid)", border: "1px solid var(--surface-high)", borderRadius: 2, padding: 3, gap: 2 }}>
+          {([{ k: "backend" as const, label: isMobile ? "Auto" : "Auto-calculate" }, { k: "excel" as const, label: isMobile ? "Excel" : "Upload Excel" }]).map(opt => (
             <button key={opt.k}
               onClick={() => opt.k !== prayerSource && setPendingSource(opt.k)}
-              className={`px-4 py-2 rounded-lg text-sm font-black transition-all ${
-                prayerSource === opt.k ? `${theme.accentBg} ${theme.accent}` : "text-zinc-500 hover:text-white"
-              }`}>
+              style={{
+                padding: isMobile ? "6px 12px" : "6px 14px",
+                borderRadius: 2,
+                fontSize: isMobile ? 12 : 13,
+                fontWeight: 700,
+                fontFamily: "Manrope, sans-serif",
+                border: prayerSource === opt.k ? "1px solid var(--accent-border)" : "1px solid transparent",
+                background: prayerSource === opt.k ? "var(--accent-bg)" : "transparent",
+                color: prayerSource === opt.k ? "var(--accent)" : "var(--text-ghost)",
+                cursor: "pointer",
+                transition: "all 0.15s",
+              }}>
               {opt.label}
             </button>
           ))}
@@ -162,41 +280,51 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
       {/* ── Today's Prayer Times ── */}
       {(() => {
         return (
-          <div className="rounded-2xl bg-zinc-900/60 border border-white/5 mb-5 overflow-hidden">
-            <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between">
+          <div style={{ background: "var(--surface-low)", border: "1px solid var(--surface-mid)", borderRadius: 2, marginBottom: 20, overflow: "hidden" }}>
+            <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--surface-high)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div>
-                <div className={`text-xs font-bold uppercase tracking-widest mb-0.5 ${theme.label}`}>Today</div>
-                <div className="text-base font-black text-white">
+                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.15em", marginBottom: 3 }}>Today</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-max)" }}>
                   {new Date().toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
                 </div>
               </div>
-              <div className="text-xs text-zinc-600 font-bold">
+              <div style={{ fontSize: 11, color: "var(--text-phantom)", fontWeight: 600 }}>
                 {todayRow ? "" : "No times loaded"}
               </div>
             </div>
-            <div className="p-5 grid grid-cols-5 gap-3">
+            <div style={{ padding: 16, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(5, 1fr)", gap: isMobile ? 8 : 10 }}>
               {PRAYER_META.map((p) => {
                 const row = todayRow as unknown as Record<string,string> | undefined;
                 const adhanT = row ? (row[`${p.key}_adhan`] || row[p.key] || "—") : "—";
                 const iqamaT = row ? (row[`${p.key}_iqama`] || "—") : "—";
-                return (
-                  <div key={p.key} className="relative bg-zinc-800/60 border border-white/5 rounded-2xl overflow-hidden flex flex-col">
-                    {/* Header */}
-                    <div className="flex flex-col items-center pt-5 pb-4 px-4 border-b border-white/5">
-                      <div className={`text-xl mb-1`} style={{ fontFamily: "serif", color: "inherit" }}>
-                        <span className={theme.accent}>{p.arabic}</span>
-                      </div>
-                      <div className="font-black text-white text-2xl tracking-tight">{p.label}</div>
-                    </div>
-                    {/* Times */}
-                    <div className="grid grid-cols-2 divide-x divide-white/5 flex-1">
+                return isMobile ? (
+                  <div key={p.key} style={{ background: "var(--surface-mid)", border: "1px solid var(--surface-high)", borderRadius: 2, display: "flex", alignItems: "center", padding: "10px 14px", gap: 12 }}>
+                    <div style={{ fontWeight: 800, color: "var(--text-max)", fontSize: 14, letterSpacing: "-0.02em", width: 68, flexShrink: 0 }}>{p.label}</div>
+                    <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 1fr" }}>
                       {[
                         { label: "Adhan", val: to12h(adhanT) },
                         { label: "Iqama", val: to12h(iqamaT) },
-                      ].map(({ label, val }) => (
-                        <div key={label} className="flex flex-col items-center justify-center py-5 px-2">
-                          <div className="text-[9px] font-black uppercase tracking-widest text-zinc-600 mb-2">{label}</div>
-                          <div className={`text-xl font-black tabular-nums text-center ${theme.accent}`}>{val}</div>
+                      ].map(({ label, val }, idx) => (
+                        <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", borderLeft: idx === 1 ? "1px solid var(--surface-high)" : "none" }}>
+                          <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--accent)", marginBottom: 3 }}>{label}</div>
+                          <div style={{ fontSize: 14, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: "var(--text-max)" }}>{val}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div key={p.key} style={{ background: "var(--surface-mid)", border: "1px solid var(--surface-high)", borderRadius: 2, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "16px 12px 12px", borderBottom: "1px solid var(--surface-high)" }}>
+                      <div style={{ fontWeight: 800, color: "var(--text-max)", fontSize: 16, letterSpacing: "-0.02em" }}>{p.label}</div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", flex: 1 }}>
+                      {[
+                        { label: "Adhan", val: to12h(adhanT) },
+                        { label: "Iqama", val: to12h(iqamaT) },
+                      ].map(({ label, val }, idx) => (
+                        <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "14px 6px", borderLeft: idx === 1 ? "1px solid var(--surface-high)" : "none" }}>
+                          <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", marginBottom: 6 }}>{label}</div>
+                          <div style={{ fontSize: 15, fontWeight: 800, fontVariantNumeric: "tabular-nums", textAlign: "center", color: "var(--text-max)" }}>{val}</div>
                         </div>
                       ))}
                     </div>
@@ -208,235 +336,296 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
         );
       })()}
 
-      {/* ── Adhan & Iqama Schedule ── */}
+      {/* ── Prayer Schedule Builder ── */}
       {(() => {
         return (
-          <div className="rounded-2xl bg-zinc-900/60 border border-white/5 mb-8 overflow-hidden">
+          <div style={{ background: "var(--surface-low)", border: "1px solid var(--surface-mid)", borderRadius: 2, marginBottom: 32, overflow: "hidden" }}>
 
             {/* ── Header ── */}
-            <div className="px-7 py-5 border-b border-white/5">
-              <div className="flex items-start justify-between gap-6">
-                <div>
-                  <h2 className="text-xl font-black text-white">Adhan &amp; Iqama</h2>
-                  <p className="text-xs text-zinc-500 font-bold mt-1">Set offsets or fixed times per prayer, then apply to a date range</p>
+            <div style={{ padding: isMobile ? "14px 16px" : "18px 24px", borderBottom: batchOpen ? "1px solid var(--surface-high)" : "none", cursor: "pointer" }}
+              onClick={() => setBatchOpen(o => !o)}>
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 16, color: "var(--accent)", transition: "transform 0.2s", transform: batchOpen ? "rotate(90deg)" : "rotate(0deg)", flexShrink: 0 }}>chevron_right</span>
+                  <div>
+                    <h2 style={{ fontSize: 14, fontWeight: 800, color: "var(--text-max)", margin: 0, letterSpacing: "-0.02em" }}>Prayer Schedule Builder</h2>
+                    {!isMobile && <p style={{ fontSize: 13, color: "var(--text-dim)", fontWeight: 400, marginTop: 4, marginBottom: 0 }}>Set offsets or fixed times per prayer, then apply to a date range</p>}
+                  </div>
                 </div>
-                {/* Date range + Apply */}
-                <div className="flex flex-col items-end gap-2 shrink-0">
-                  <div className="flex items-center gap-2">
-                    <div className="flex flex-col gap-0.5">
-                      <span className="text-[9px] font-black uppercase tracking-widest text-zinc-600 text-right">From</span>
+                {/* Date range + Apply — hidden on mobile (shown below) */}
+                {batchOpen && !isMobile && <div onClick={e => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", textAlign: "right" }}>From</span>
                       <DatePicker value={batchFrom} onChange={setBatchFrom} placeholder="Start date" align="left" />
                     </div>
-                    <div className="flex flex-col gap-0.5">
-                      <span className="text-[9px] font-black uppercase tracking-widest text-zinc-600 text-right">To</span>
-                      <DatePicker value={batchTo} onChange={setBatchTo} placeholder="End date" align="left" />
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", textAlign: "right" }}>To</span>
+                      <DatePicker value={batchTo} onChange={setBatchTo} placeholder="End date" align="right" rangeStart={batchFrom} />
                     </div>
-                    <div className="flex flex-col gap-0.5">
-                      <span className="text-[9px] font-black uppercase tracking-widest text-zinc-600 opacity-0">Btn</span>
-                      <button onClick={handleBatchApply} disabled={applyingBatch}
-                        className={`flex items-center gap-2 px-5 py-2 rounded-xl font-black text-sm transition-all h-[38px] ${
-                          batchApplied ? "bg-emerald-500/20 border border-emerald-500/40 text-emerald-400"
-                            : applyingBatch ? "bg-zinc-800 text-zinc-500 cursor-wait border border-white/5"
-                            : `${theme.btn}`
-                        }`}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "transparent" }}>Btn</span>
+                      <button onClick={() => setShowSummary(true)} disabled={applyingBatch || !batchFrom || !batchTo}
+                        style={(() => {
+                          const inactive = applyingBatch || !batchFrom || !batchTo;
+                          return {
+                            display: "flex", alignItems: "center", gap: 6, padding: "7px 18px",
+                            borderRadius: 2, fontWeight: 700, fontSize: 13, fontFamily: "Manrope, sans-serif",
+                            height: 38, transition: "all 0.15s",
+                            cursor: applyingBatch ? "wait" : inactive ? "not-allowed" : "pointer",
+                            background: batchApplied ? "var(--accent-bg)" : inactive ? "var(--surface-high)" : "var(--accent)",
+                            border: batchApplied ? "1px solid var(--accent-border)" : inactive ? "1px solid var(--surface-mid)" : "1px solid var(--accent)",
+                            color: batchApplied ? "var(--accent)" : inactive ? "var(--text-ghost)" : "var(--accent-text)",
+                          };
+                        })()}>
                         {applyingBatch
                           ? <><svg className="animate-spin w-4 h-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> Applying…</>
-                          : batchApplied ? <><Icon d="M5 13l4 4L19 7" className="w-4 h-4" /> Applied</>
+                          : batchApplied ? <><span className="material-symbols-outlined" style={{ fontSize: 16 }}>check</span> Applied</>
                           : "Apply"
                         }
                       </button>
                     </div>
                   </div>
                   {batchError && (
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-red-400">
-                      <Icon d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" className="w-3.5 h-3.5 shrink-0" />
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, color: "#f87171" }}>
+                      <span className="material-symbols-outlined" style={{ fontSize: 14, flexShrink: 0 }}>warning</span>
                       {batchError}
                     </div>
                   )}
-                </div>
+                </div>}
               </div>
+              {/* Mobile: date range + apply stacked below title */}
+              {batchOpen && isMobile && (
+                <div onClick={e => e.stopPropagation()} style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--accent)" }}>From</span>
+                      <DatePicker value={batchFrom} onChange={setBatchFrom} placeholder="Start" align="left" />
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--accent)" }}>To</span>
+                      <DatePicker value={batchTo} onChange={setBatchTo} placeholder="End" align="right" rangeStart={batchFrom} />
+                    </div>
+                  </div>
+                  <button onClick={() => setShowSummary(true)} disabled={applyingBatch || !batchFrom || !batchTo}
+                    style={(() => {
+                      const inactive = applyingBatch || !batchFrom || !batchTo;
+                      return {
+                        width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                        padding: "9px 0", borderRadius: 2, fontWeight: 700, fontSize: 13, fontFamily: "Manrope, sans-serif",
+                        cursor: applyingBatch ? "wait" : inactive ? "not-allowed" : "pointer",
+                        background: batchApplied ? "var(--accent-bg)" : inactive ? "var(--surface-high)" : "var(--accent)",
+                        border: batchApplied ? "1px solid var(--accent-border)" : inactive ? "1px solid var(--surface-mid)" : "1px solid var(--accent)",
+                        color: batchApplied ? "var(--accent)" : inactive ? "var(--text-ghost)" : "var(--accent-text)",
+                      };
+                    })()}>
+                    {applyingBatch ? "Applying…" : batchApplied ? "Applied ✓" : "Apply"}
+                  </button>
+                  {batchError && <div style={{ fontSize: 11, fontWeight: 600, color: "#f87171" }}>{batchError}</div>}
+                </div>
+              )}
             </div>
 
-            {/* ── Column headers ── */}
-            <div className="grid grid-cols-[120px_1fr_1fr_1fr_1fr_1fr] border-b border-white/5 bg-zinc-950/30">
-              <div className="px-5 py-2.5" />
-              {PRAYER_META.map(p => (
-                <div key={p.key} className="px-5 py-2.5 border-l border-white/5 flex items-center gap-2">
-                  <span className="font-black text-white text-sm">{p.label}</span>
-                  <span className={`text-xs ${theme.accent}`} style={{ fontFamily: "serif" }}>{p.arabic}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* ── Adhan row ── */}
-            <div className="grid grid-cols-[120px_1fr_1fr_1fr_1fr_1fr] border-b border-white/5">
-              <div className="px-5 py-4 flex items-center">
-                <span className="text-xs font-black uppercase tracking-widest text-zinc-500">Adhan</span>
-              </div>
-              {PRAYER_META.map(p => (
-                <div key={p.key} className="px-5 py-4 border-l border-white/5">
-                  <BatchControl
-                    cell={(batchAdhan as unknown as Record<string, BatchCell>)[p.key]}
-                    onUpdate={patch => setBatchAdhan(prev => ({ ...prev, [p.key]: { ...(prev as unknown as Record<string, BatchCell>)[p.key], ...patch } }))}
-                    placeholder="6:00 AM" accentBg={theme.accentBg} accent={theme.accent} />
-                </div>
-              ))}
-            </div>
-
-            {/* ── Iqama row ── */}
-            <div className="grid grid-cols-[120px_1fr_1fr_1fr_1fr_1fr] border-b border-white/5">
-              <div className="px-5 py-4 flex items-center">
-                <span className="text-xs font-black uppercase tracking-widest text-zinc-500">Iqama</span>
-              </div>
-              {PRAYER_META.map(p => (
-                <div key={p.key} className="px-5 py-4 border-l border-white/5">
-                  <BatchControl
-                    cell={(batchIqama as unknown as Record<string, BatchCell>)[p.key]}
-                    onUpdate={patch => setBatchIqama(prev => ({ ...prev, [p.key]: { ...(prev as unknown as Record<string, BatchCell>)[p.key], ...patch } }))}
-                    placeholder="6:30 AM" accentBg={theme.accentBg} accent={theme.accent} />
-                </div>
-              ))}
-            </div>
-
-            {/* ── 2nd Jamaat row (fajr + maghrib only) ── */}
-            {(jamaatSettings.fajr2 || jamaatSettings.maghrib2) && (
-              <div className="grid grid-cols-[120px_1fr_1fr_1fr_1fr_1fr] border-b border-white/5">
-                <div className="px-5 py-4 flex items-center">
-                  <span className="text-xs font-black uppercase tracking-widest text-zinc-500">2nd Jamaat</span>
-                </div>
+            {batchOpen && (<>
+            {isMobile ? (
+              /* ── Mobile: vertical per-prayer cards ── */
+              <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
                 {PRAYER_META.map(p => {
-                  const show = (p.key === "fajr" && jamaatSettings.fajr2) || (p.key === "maghrib" && jamaatSettings.maghrib2);
+                  const show2nd = (p.key === "fajr" && jamaatSettings.fajr2) || (p.key === "maghrib" && jamaatSettings.maghrib2);
+                  const show3rd = (p.key === "fajr" && jamaatSettings.fajr3) || (p.key === "maghrib" && jamaatSettings.maghrib3);
                   const k = p.key as "fajr" | "maghrib";
                   return (
-                    <div key={p.key} className="px-5 py-4 border-l border-white/5">
-                      {show ? <BatchControl cell={batchIqama2[k]}
-                        onUpdate={patch => setBatchIqama2(prev => ({ ...prev, [k]: { ...prev[k], ...patch } }))}
-                        placeholder="7:00 AM" accentBg={theme.accentBg} accent={theme.accent} />
-                      : <span className="text-zinc-700 text-xs">—</span>}
+                    <div key={p.key} style={{ borderBottom: "1px solid var(--surface-high)" }}>
+                      {/* Prayer name header */}
+                      <div style={{ padding: "8px 16px", background: "var(--surface-mid)" }}>
+                        <span style={{ fontWeight: 800, color: "var(--text-max)", fontSize: 13, letterSpacing: "-0.02em" }}>{p.label}</span>
+                      </div>
+                      {/* Adhan */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", borderTop: "1px solid var(--surface-high)" }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--accent)", width: 68, flexShrink: 0 }}>Adhan</span>
+                        <div style={{ flex: 1 }}>
+                          <BatchControl
+                            cell={(batchAdhan as unknown as Record<string, BatchCell>)[p.key]}
+                            onUpdate={patch => setBatchAdhan(prev => ({ ...prev, [p.key]: { ...(prev as unknown as Record<string, BatchCell>)[p.key], ...patch } }))}
+                            placeholder="6:00 AM" accentBg="" accent="" />
+                        </div>
+                      </div>
+                      {/* Iqama */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", borderTop: "1px solid var(--surface-high)" }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--accent)", width: 68, flexShrink: 0 }}>Iqama</span>
+                        <div style={{ flex: 1 }}>
+                          <BatchControl
+                            cell={(batchIqama as unknown as Record<string, BatchCell>)[p.key]}
+                            onUpdate={patch => setBatchIqama(prev => ({ ...prev, [p.key]: { ...(prev as unknown as Record<string, BatchCell>)[p.key], ...patch } }))}
+                            placeholder="6:30 AM" accentBg="" accent="" />
+                        </div>
+                      </div>
+                      {/* 2nd Jamaat */}
+                      {show2nd && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", borderTop: "1px solid var(--surface-high)" }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--accent)", width: 68, flexShrink: 0 }}>2nd Jam.</span>
+                          <div style={{ flex: 1 }}>
+                            <BatchControl cell={batchIqama2[k]}
+                              onUpdate={patch => setBatchIqama2(prev => ({ ...prev, [k]: { ...prev[k], ...patch } }))}
+                              placeholder="7:00 AM" accentBg="" accent="" />
+                          </div>
+                        </div>
+                      )}
+                      {/* 3rd Jamaat */}
+                      {show3rd && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", borderTop: "1px solid var(--surface-high)" }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--accent)", width: 68, flexShrink: 0 }}>3rd Jam.</span>
+                          <div style={{ flex: 1 }}>
+                            <BatchControl cell={batchIqama3[k]}
+                              onUpdate={patch => setBatchIqama3(prev => ({ ...prev, [k]: { ...prev[k], ...patch } }))}
+                              placeholder="7:30 AM" accentBg="" accent="" />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
-            )}
-
-            {/* ── 3rd Jamaat row (fajr + maghrib only) ── */}
-            {(jamaatSettings.fajr3 || jamaatSettings.maghrib3) && (
-              <div className="grid grid-cols-[120px_1fr_1fr_1fr_1fr_1fr] border-b border-white/5">
-                <div className="px-5 py-4 flex items-center">
-                  <span className="text-xs font-black uppercase tracking-widest text-zinc-500">3rd Jamaat</span>
-                </div>
-                {PRAYER_META.map(p => {
-                  const show = (p.key === "fajr" && jamaatSettings.fajr3) || (p.key === "maghrib" && jamaatSettings.maghrib3);
-                  const k = p.key as "fajr" | "maghrib";
-                  return (
-                    <div key={p.key} className="px-5 py-4 border-l border-white/5">
-                      {show ? <BatchControl cell={batchIqama3[k]}
-                        onUpdate={patch => setBatchIqama3(prev => ({ ...prev, [k]: { ...prev[k], ...patch } }))}
-                        placeholder="7:30 AM" accentBg={theme.accentBg} accent={theme.accent} />
-                      : <span className="text-zinc-700 text-xs">—</span>}
-                    </div>
-                  );
-                })}
+            ) : (
+              <div>
+              {/* ── Desktop: Column headers ── */}
+              <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr 1fr 1fr 1fr", borderBottom: "1px solid var(--surface-high)", background: "var(--surface-mid)" }}>
+                <div style={{ padding: "10px 18px" }} />
+                {PRAYER_META.map(p => (
+                  <div key={p.key} style={{ padding: "10px 18px", borderLeft: "1px solid var(--surface-high)", display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontWeight: 800, color: "var(--text-max)", fontSize: 13, letterSpacing: "-0.02em" }}>{p.label}</span>
+                  </div>
+                ))}
               </div>
-            )}
 
+              {/* ── Adhan row ── */}
+              <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr 1fr 1fr 1fr", borderBottom: "1px solid var(--surface-high)" }}>
+                <div style={{ padding: "14px 18px", display: "flex", alignItems: "center" }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)" }}>Adhan</span>
+                </div>
+                {PRAYER_META.map(p => (
+                  <div key={p.key} style={{ padding: "14px 18px", borderLeft: "1px solid var(--surface-high)" }}>
+                    <BatchControl
+                      cell={(batchAdhan as unknown as Record<string, BatchCell>)[p.key]}
+                      onUpdate={patch => setBatchAdhan(prev => ({ ...prev, [p.key]: { ...(prev as unknown as Record<string, BatchCell>)[p.key], ...patch } }))}
+                      placeholder="6:00 AM" accentBg="" accent="" />
+                  </div>
+                ))}
+              </div>
+
+              {/* ── Iqama row ── */}
+              <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr 1fr 1fr 1fr", borderBottom: "1px solid var(--surface-high)" }}>
+                <div style={{ padding: "14px 18px", display: "flex", alignItems: "center" }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)" }}>Iqama</span>
+                </div>
+                {PRAYER_META.map(p => (
+                  <div key={p.key} style={{ padding: "14px 18px", borderLeft: "1px solid var(--surface-high)" }}>
+                    <BatchControl
+                      cell={(batchIqama as unknown as Record<string, BatchCell>)[p.key]}
+                      onUpdate={patch => setBatchIqama(prev => ({ ...prev, [p.key]: { ...(prev as unknown as Record<string, BatchCell>)[p.key], ...patch } }))}
+                      placeholder="6:30 AM" accentBg="" accent="" />
+                  </div>
+                ))}
+              </div>
+
+              {/* ── 2nd Jamaat row (fajr + maghrib only) ── */}
+              {(jamaatSettings.fajr2 || jamaatSettings.maghrib2) && (
+                <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr 1fr 1fr 1fr", borderBottom: "1px solid var(--surface-high)" }}>
+                  <div style={{ padding: "14px 18px", display: "flex", alignItems: "center" }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)" }}>2nd Jamaat</span>
+                  </div>
+                  {PRAYER_META.map(p => {
+                    const show = (p.key === "fajr" && jamaatSettings.fajr2) || (p.key === "maghrib" && jamaatSettings.maghrib2);
+                    const k = p.key as "fajr" | "maghrib";
+                    return (
+                      <div key={p.key} style={{ padding: "14px 18px", borderLeft: "1px solid var(--surface-high)" }}>
+                        {show ? <BatchControl cell={batchIqama2[k]}
+                          onUpdate={patch => setBatchIqama2(prev => ({ ...prev, [k]: { ...prev[k], ...patch } }))}
+                          placeholder="7:00 AM" accentBg="" accent="" />
+                        : <span style={{ color: "var(--text-phantom)", fontSize: 12 }}>—</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* ── 3rd Jamaat row (fajr + maghrib only) ── */}
+              {(jamaatSettings.fajr3 || jamaatSettings.maghrib3) && (
+                <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr 1fr 1fr 1fr", borderBottom: "1px solid var(--surface-high)" }}>
+                  <div style={{ padding: "14px 18px", display: "flex", alignItems: "center" }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)" }}>3rd Jamaat</span>
+                  </div>
+                  {PRAYER_META.map(p => {
+                    const show = (p.key === "fajr" && jamaatSettings.fajr3) || (p.key === "maghrib" && jamaatSettings.maghrib3);
+                    const k = p.key as "fajr" | "maghrib";
+                    return (
+                      <div key={p.key} style={{ padding: "14px 18px", borderLeft: "1px solid var(--surface-high)" }}>
+                        {show ? <BatchControl cell={batchIqama3[k]}
+                          onUpdate={patch => setBatchIqama3(prev => ({ ...prev, [k]: { ...prev[k], ...patch } }))}
+                          placeholder="7:30 AM" accentBg="" accent="" />
+                        : <span style={{ color: "var(--text-phantom)", fontSize: 12 }}>—</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              </div>
+            )}{/* end desktop grid */}
             {/* ── Jummah + Weekend Isha ── */}
-            <div className="px-7 py-5 grid grid-cols-2 gap-5">
+            <div style={{ padding: isMobile ? "14px 16px" : "20px 24px", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
 
               {/* Jummah */}
-              <div className="bg-zinc-800/30 border border-white/[0.06] rounded-2xl p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-black uppercase tracking-widest text-zinc-400">Jummah</span>
-                      <span className={`text-sm ${theme.accent}`} style={{ fontFamily: "serif" }}>الجمعة</span>
-                    </div>
-                    <p className="text-[10px] text-zinc-600 font-bold mt-0.5">Applied to Fridays in the date range</p>
+              {extraTimings.jummahSlots.some(Boolean) && (
+                <div style={{ background: "var(--surface-mid)", border: "1px solid var(--surface-high)", borderRadius: 2, padding: 18 }}>
+                  <div style={{ marginBottom: 14 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--text-max)" }}>Jummah</span>
+                    <p style={{ fontSize: 13, color: "var(--text-dim)", fontWeight: 400, marginTop: 2, marginBottom: 0 }}>Applied to Fridays in the date range</p>
                   </div>
-                  {extraTimings.jummah.length < 3 && (
-                    <button onClick={() => setExtraTimings(prev => ({ ...prev, jummah: [...prev.jummah, ""] }))}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-black ${theme.subtleBtn}`}>+ Add</button>
-                  )}
-                </div>
-                {extraTimings.jummah.length === 0 ? (
-                  <div className="text-xs text-zinc-600 font-bold py-5 text-center border border-dashed border-white/8 rounded-xl">
-                    No Jummah times yet
-                  </div>
-                ) : (
-                  <div className="flex gap-3">
-                    {extraTimings.jummah.map((t, i) => (
-                      <div key={i} className="flex-1 bg-zinc-900/60 border border-white/8 rounded-xl p-3 hover:border-white/15 transition-all">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className={`text-[9px] font-black uppercase tracking-widest ${theme.label}`}>Khutbah {i + 1}</span>
-                          <button onClick={() => setExtraTimings(prev => ({ ...prev, jummah: prev.jummah.filter((_, j) => j !== i) }))}
-                            className="text-zinc-600 hover:text-rose-400 text-xs font-black transition-colors">×</button>
-                        </div>
-                        <LocalInput
-                          value={t}
+                  <div style={{ display: "flex", gap: 10 }}>
+                    {(["1st", "2nd", "3rd"] as const).map((label, i) => extraTimings.jummahSlots[i] ? (
+                      <div key={i} style={{ flex: 1, background: "var(--surface-low)", border: "1px solid var(--outline-variant)", borderRadius: 2, padding: 10 }}>
+                        <span style={{ display: "block", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", marginBottom: 8 }}>Khutbah {label}</span>
+                        <LocalInput value={extraTimings.jummah[i] ?? ""}
                           onCommit={v => { const u = [...extraTimings.jummah]; u[i] = formatTimeInput(v); setExtraTimings(prev => ({ ...prev, jummah: u })); }}
                           placeholder="1:15 PM"
-                          className="w-full bg-zinc-800/60 border border-white/8 rounded-lg px-3 py-2 text-lg font-black text-white focus:outline-none focus:border-white/20" />
+                          style={{ width: "100%", background: "var(--surface-low)", border: "1px solid var(--outline-variant)", borderRadius: 2, padding: "6px 10px", fontSize: 15, fontWeight: 800, color: "var(--text-max)", outline: "none", fontFamily: "Manrope, sans-serif" } as React.CSSProperties} />
                       </div>
-                    ))}
+                    ) : null)}
                   </div>
-                )}
-              </div>
-
-              {/* Weekend Isha */}
-              <div className="bg-zinc-800/30 border border-white/[0.06] rounded-2xl p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-black uppercase tracking-widest text-zinc-400">Weekend Isha</span>
-                      <span className={`text-sm ${theme.accent}`} style={{ fontFamily: "serif" }}>العشاء</span>
-                    </div>
-                    <p className="text-[10px] text-zinc-600 font-bold mt-0.5">Override Isha iqama on selected days</p>
-                  </div>
-                  <button
-                    onClick={() => setExtraTimings(prev => ({ ...prev, weekendIsha: { ...prev.weekendIsha, enabled: !prev.weekendIsha.enabled } }))}
-                    className={`w-10 h-6 rounded-full relative transition-all shrink-0 border ${extraTimings.weekendIsha.enabled ? `${theme.accentBg} ${theme.accentBorder}` : "bg-zinc-700 border-transparent"}`}>
-                    <div className={`absolute top-0.5 w-4 h-4 rounded-full transition-all ${extraTimings.weekendIsha.enabled ? `${theme.dot} right-0.5` : "bg-zinc-500 left-0.5"}`} />
-                  </button>
                 </div>
-                {extraTimings.weekendIsha.enabled ? (
-                  <div className="space-y-3">
-                    <div className="flex gap-2">
-                      {[{ id: "fri", label: "Fri" }, { id: "sat", label: "Sat" }, { id: "sun", label: "Sun" }].map(d => {
-                        const active = extraTimings.weekendIsha.days.includes(d.id);
-                        return (
-                          <button key={d.id}
-                            onClick={() => setExtraTimings(prev => ({
-                              ...prev,
-                              weekendIsha: {
-                                ...prev.weekendIsha,
-                                days: active ? prev.weekendIsha.days.filter(x => x !== d.id) : [...prev.weekendIsha.days, d.id],
-                              },
-                            }))}
-                            className={`flex-1 py-2 rounded-xl text-xs font-black border transition-all ${
-                              active ? `${theme.accentBg} ${theme.accentBorder} ${theme.accent}` : "bg-zinc-900/60 border-white/8 text-zinc-500 hover:border-white/15"
-                            }`}>
-                            {d.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <div className="bg-zinc-900/60 border border-white/8 rounded-xl p-3">
-                      <div className="text-[9px] font-black uppercase tracking-widest text-zinc-600 mb-2">Iqama Time</div>
-                      <LocalInput
-                        value={extraTimings.weekendIsha.iqama}
-                        onCommit={v => setExtraTimings(prev => ({ ...prev, weekendIsha: { ...prev.weekendIsha, iqama: formatTimeInput(v) } }))}
-                        placeholder="10:00 PM"
-                        className="w-full bg-transparent border-none outline-none text-lg font-black text-white focus:outline-none" />
-                    </div>
+              )}
+
+              {/* Weekend Isha — always shown, spans full width when no Jummah */}
+              <div style={{ gridColumn: extraTimings.jummahSlots.some(Boolean) ? undefined : "1 / -1", background: "var(--surface-mid)", border: "1px solid var(--surface-high)", borderRadius: 2, padding: 18 }}>
+                <div style={{ marginBottom: 14 }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--text-max)" }}>Weekend Isha</span>
+                  <p style={{ fontSize: 13, color: "var(--text-dim)", fontWeight: 400, marginTop: 2, marginBottom: 0 }}>Override Isha iqama on selected days</p>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {[{ id: "fri", label: "Fri" }, { id: "sat", label: "Sat" }, { id: "sun", label: "Sun" }].map(d => {
+                      const active = extraTimings.weekendIsha.days.includes(d.id);
+                      return (
+                        <button key={d.id}
+                          onClick={() => setExtraTimings(prev => ({ ...prev, weekendIsha: { ...prev.weekendIsha, days: active ? prev.weekendIsha.days.filter(x => x !== d.id) : [...prev.weekendIsha.days, d.id] } }))}
+                          style={{ flex: 1, padding: "7px 0", borderRadius: 2, fontSize: 12, fontWeight: 700, fontFamily: "Manrope, sans-serif", border: active ? "1px solid var(--accent-border)" : "1px solid var(--surface-high)", background: active ? "var(--accent-bg)" : "transparent", color: active ? "var(--accent)" : "var(--text-phantom)", cursor: "pointer", transition: "all 0.15s" }}>
+                          {d.label}
+                        </button>
+                      );
+                    })}
                   </div>
-                ) : (
-                  <div className="text-xs text-zinc-600 font-bold py-5 text-center border border-dashed border-white/8 rounded-xl">
-                    Enable to set a weekend override
+                  <div style={{ background: "var(--surface-low)", border: "1px solid var(--outline-variant)", borderRadius: 2, padding: 10 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", marginBottom: 6 }}>Iqama Time</div>
+                    <LocalInput value={extraTimings.weekendIsha.iqama}
+                      onCommit={v => setExtraTimings(prev => ({ ...prev, weekendIsha: { ...prev.weekendIsha, iqama: formatTimeInput(v) } }))}
+                      placeholder="10:00 PM"
+                      style={{ width: "100%", background: "transparent", border: "none", outline: "none", fontSize: 15, fontWeight: 800, color: "var(--text-max)", fontFamily: "Manrope, sans-serif" } as React.CSSProperties} />
                   </div>
-                )}
+                </div>
               </div>
 
             </div>
+            </>)}
           </div>
         );
       })()}
@@ -444,60 +633,75 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
 
       {/* ── Source switch confirmation modal ── */}
       {pendingSource && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ backdropFilter: "blur(4px)", backgroundColor: "rgba(0,0,0,0.75)" }}>
-          <div className="w-full max-w-md bg-zinc-900 border border-white/8 rounded-3xl overflow-hidden shadow-2xl">
+        <div style={{ position: "fixed", inset: 0, zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(4px)", backgroundColor: "rgba(0,0,0,0.75)" }}>
+          <div style={{ width: "100%", maxWidth: 440, background: "var(--surface-low)", border: "1px solid var(--surface-mid)", borderRadius: 2, overflow: "hidden", boxShadow: "0 25px 50px rgba(0,0,0,0.6)" }}>
 
             {/* Top band */}
-            <div className={`px-7 pt-7 pb-5 ${pendingSource === "excel" ? "bg-red-500/5 border-b border-red-500/10" : `bg-zinc-800/40 border-b border-white/5`}`}>
-              <div className="flex items-center gap-3 mb-4">
-                <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${pendingSource === "excel" ? "bg-red-500/15 border border-red-500/25" : `${theme.iconBg}`}`}>
+            <div style={{
+              padding: "24px 28px 18px",
+              background: pendingSource === "excel" ? "rgba(239,68,68,0.06)" : "var(--surface-low)",
+              borderBottom: pendingSource === "excel" ? "1px solid rgba(239,68,68,0.15)" : "1px solid var(--surface-high)",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+                <div style={{
+                  width: 38, height: 38, borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                  background: pendingSource === "excel" ? "rgba(239,68,68,0.06)" : "var(--surface-mid)",
+                  border: pendingSource === "excel" ? "1px solid rgba(239,68,68,0.15)" : "1px solid var(--surface-high)",
+                }}>
                   {pendingSource === "excel"
-                    ? <Icon d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" className="w-5 h-5 text-red-400" />
-                    : <Icon d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" className={`w-5 h-5 ${theme.iconColor}`} />
+                    ? <span className="material-symbols-outlined" style={{ fontSize: 20, color: "#f87171" }}>delete</span>
+                    : <span className="material-symbols-outlined" style={{ fontSize: 20, color: "var(--accent)" }}>refresh</span>
                   }
                 </div>
                 <div>
-                  <div className="text-xs font-black uppercase tracking-widest text-zinc-500 mb-0.5">Switching source</div>
-                  <div className="text-lg font-black text-white">
+                  <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", marginBottom: 3 }}>Switching source</div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: "var(--text-max)", letterSpacing: "-0.02em" }}>
                     {pendingSource === "excel" ? "Upload Excel" : "Auto-calculate"}
                   </div>
                 </div>
               </div>
 
               {/* Before / After */}
-              <div className="flex items-center gap-3">
-                <div className="flex-1 px-4 py-3 rounded-xl bg-zinc-800/80 border border-white/8 text-center">
-                  <div className="text-xs text-zinc-600 font-bold mb-0.5 uppercase tracking-wider">From</div>
-                  <div className="text-sm font-black text-zinc-300">{prayerSource === "backend" ? "Auto-calculate" : "Upload Excel"}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ flex: 1, padding: "10px 14px", borderRadius: 2, background: "var(--surface-mid)", border: "1px solid var(--surface-high)", textAlign: "center" }}>
+                  <div style={{ fontSize: 10, color: "var(--accent)", fontWeight: 700, marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.12em" }}>From</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-dim)" }}>{prayerSource === "backend" ? "Auto-calculate" : "Upload Excel"}</div>
                 </div>
-                <Icon d="M17 8l4 4m0 0l-4 4m4-4H3" className="w-4 h-4 text-zinc-600 shrink-0" />
-                <div className={`flex-1 px-4 py-3 rounded-xl border text-center ${pendingSource === "excel" ? "bg-red-500/10 border-red-500/20" : `${theme.accentBg} ${theme.accentBorder}`}`}>
-                  <div className={`text-xs font-bold mb-0.5 uppercase tracking-wider ${pendingSource === "excel" ? "text-red-500/70" : theme.label}`}>To</div>
-                  <div className={`text-sm font-black ${pendingSource === "excel" ? "text-red-400" : theme.accent}`}>{pendingSource === "excel" ? "Upload Excel" : "Auto-calculate"}</div>
+                <span className="material-symbols-outlined" style={{ fontSize: 16, color: "var(--text-phantom)", flexShrink: 0 }}>arrow_forward</span>
+                <div style={{
+                  flex: 1, padding: "10px 14px", borderRadius: 2, textAlign: "center",
+                  background: pendingSource === "excel" ? "rgba(239,68,68,0.06)" : "var(--accent-bg)",
+                  border: pendingSource === "excel" ? "1px solid rgba(239,68,68,0.15)" : "1px solid var(--accent-bg)",
+                }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.12em", color: pendingSource === "excel" ? "rgba(248,113,113,0.7)" : "var(--accent)" }}>To</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: pendingSource === "excel" ? "#f87171" : "var(--accent)" }}>{pendingSource === "excel" ? "Upload Excel" : "Auto-calculate"}</div>
                 </div>
               </div>
             </div>
 
             {/* Body */}
-            <div className="px-7 py-5">
-              <p className="text-zinc-400 text-sm leading-relaxed">
+            <div style={{ padding: "18px 28px" }}>
+              <p style={{ color: "var(--text-dim)", fontSize: 13, lineHeight: 1.6, margin: 0 }}>
                 {pendingSource === "excel"
-                  ? <><span className="text-red-400 font-bold">All prayer times will be deleted</span> from the database. You'll need to upload an Excel file to add them back.</>
-                  : <><span className={`${theme.accent} font-bold`}>Prayer times will be recalculated</span> for the full year using your location and method settings, overwriting any existing data.</>
+                  ? <><span style={{ color: "#f87171", fontWeight: 700 }}>All prayer times will be deleted</span> from the database. You'll need to upload an Excel file to add them back.</>
+                  : <><span style={{ color: "var(--text-max)", fontWeight: 700 }}>Prayer times will be recalculated</span> for the full year using your location and method settings, overwriting any existing data.</>
                 }
               </p>
             </div>
 
             {/* Actions */}
-            <div className="px-7 pb-7 flex gap-3">
+            <div style={{ padding: "0 28px 28px", display: "flex", gap: 10 }}>
               <button onClick={() => setPendingSource(null)}
-                className="flex-1 py-3 rounded-xl font-bold text-sm text-zinc-400 border border-white/10 hover:bg-white/5 hover:text-white transition-all">
+                style={{ flex: 1, padding: "11px 0", borderRadius: 2, fontWeight: 600, fontSize: 13, fontFamily: "Manrope, sans-serif", color: "var(--text-ghost)", border: "1px solid var(--outline-variant)", background: "transparent", cursor: "pointer", transition: "all 0.15s" }}>
                 Cancel
               </button>
               <button onClick={handleConfirmSourceSwitch}
-                className={`flex-1 py-3 rounded-xl font-black text-sm transition-all ${
-                  pendingSource === "excel" ? "bg-red-500 hover:bg-red-400 text-white" : `${theme.btn} hover:opacity-90`
-                }`}>
+                style={{
+                  flex: 1, padding: "11px 0", borderRadius: 2, fontWeight: 700, fontSize: 13, fontFamily: "Manrope, sans-serif", cursor: "pointer", transition: "all 0.15s",
+                  background: pendingSource === "excel" ? "rgba(239,68,68,0.06)" : "var(--accent)",
+                  color: pendingSource === "excel" ? "#f87171" : "var(--accent-text)",
+                  border: pendingSource === "excel" ? "1px solid rgba(239,68,68,0.15)" : "1px solid var(--accent)",
+                }}>
                 {pendingSource === "excel" ? "Delete & Switch" : "Generate & Switch"}
               </button>
             </div>
@@ -506,29 +710,63 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
       )}
 
       {/* ── Month + Action bar ── */}
-      <div className="flex items-center gap-4 rounded-2xl px-5 py-4 mb-6 border bg-zinc-900/60 border-white/5">
-        {/* Month pills */}
-        <div className="flex gap-2 flex-1 overflow-x-auto pb-0.5 scrollbar-none">
-          {months.map((m) => {
-            const hasData = !!prayerTimesByMonth[m.value];
-            const isActive = selectedMonth === m.value;
-            return (
-              <button key={m.value} onClick={() => { setSelectedMonth(m.value); setScheduleEdited(false); }}
-                className={`flex items-center gap-1.5 px-4 py-2 rounded-xl font-bold text-sm border-2 transition-all ${
-                  isActive ? `${theme.accentBg} ${theme.accentBorder} ${theme.accent}` : "border-white/5 bg-zinc-800/30 hover:border-white/10 text-zinc-500 hover:text-white"
-                }`}>
-                {m.label.split(" ")[0]}
-                {hasData && <span className={`w-1.5 h-1.5 rounded-full ${isActive ? theme.dot : "bg-zinc-500"}`} />}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Action */}
-        <div className="flex items-center gap-3 shrink-0">
+      <div style={{ background: "var(--surface-low)", border: "1px solid var(--surface-mid)", borderRadius: 2, padding: "12px 16px", marginBottom: 20 }}>
+        {isMobile ? (
+          /* Mobile: month + year dropdowns */
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <Select
+                value={selectedMonth}
+                onChange={v => { setSelectedMonth(v); setScheduleEdited(false); }}
+                options={months.map(m => ({ value: m.value, label: m.label.split(" ")[0] + (prayerTimesByMonth[m.value] ? " ●" : "") }))}
+                style={{ padding: "8px 12px", fontSize: 13, fontWeight: 700 }}
+              />
+            </div>
+            <div style={{ width: 100 }}>
+              <Select
+                value={String(selectedYear)}
+                onChange={v => setSelectedYear(Number(v))}
+                options={[selectedYear - 2, selectedYear - 1, selectedYear, selectedYear + 1, selectedYear + 2].map(y => ({ value: String(y), label: String(y) }))}
+                style={{ padding: "8px 12px", fontSize: 13, fontWeight: 700 }}
+              />
+            </div>
+            {prayerSource === "excel" && (
+              <div>
+                <input type="file" accept=".xlsx,.xls" onChange={handleFileChange} className="hidden" id="file-upload-bar-mobile" />
+                <label htmlFor="file-upload-bar-mobile" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 38, height: 38, background: uploadFile ? "var(--accent-bg)" : "transparent", border: uploadFile ? "1px solid var(--accent-border)" : "1px dashed var(--outline-variant)", borderRadius: 2, cursor: "pointer", color: uploadFile ? "var(--accent)" : "var(--text-ghost)" }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 18 }}>upload_file</span>
+                </label>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            {/* Month pills */}
+            <div style={{ display: "flex", gap: 6, flex: 1 }}>
+              {months.map((m) => {
+                const hasData = !!prayerTimesByMonth[m.value];
+                const isActive = selectedMonth === m.value;
+                return (
+                  <button key={m.value} onClick={() => { setSelectedMonth(m.value); setScheduleEdited(false); }}
+                    style={{
+                      flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                      padding: "6px 0", borderRadius: 2, fontWeight: 700, fontSize: 12,
+                      fontFamily: "Manrope, sans-serif", whiteSpace: "nowrap", cursor: "pointer", transition: "all 0.15s",
+                      background: isActive ? "var(--accent-bg)" : "var(--surface-mid)",
+                      border: isActive ? "1px solid var(--accent-border)" : "1px solid var(--surface-high)",
+                      color: isActive ? "var(--accent)" : "var(--text-ghost)",
+                    }}>
+                    {m.label.split(" ")[0]}
+                    {hasData && <span style={{ width: 5, height: 5, borderRadius: "50%", background: isActive ? "var(--accent)" : "var(--outline)" }} />}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Action */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           {prayerSource === "backend" ? (
             switchLoading ? (
-              <div className="flex items-center gap-2 text-xs font-bold text-zinc-500">
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontWeight: 600, color: "var(--text-ghost)" }}>
                 <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
@@ -536,12 +774,12 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
                 Generating…
               </div>
             ) : (
-              <div className="flex items-center gap-1">
-                <button onClick={() => setSelectedYear(y => y - 1)} className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 transition-all">
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <button onClick={() => setSelectedYear(y => y - 1)} style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 2, color: "var(--text-ghost)", background: "transparent", border: "1px solid var(--surface-high)", cursor: "pointer" }}>
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" /></svg>
                 </button>
-                <span className="text-sm font-black text-white w-10 text-center">{selectedYear}</span>
-                <button onClick={() => setSelectedYear(y => y + 1)} className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 transition-all">
+                <span style={{ fontSize: 13, fontWeight: 800, color: "var(--text-max)", width: 40, textAlign: "center" }}>{selectedYear}</span>
+                <button onClick={() => setSelectedYear(y => y + 1)} style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 2, color: "var(--text-ghost)", background: "transparent", border: "1px solid var(--surface-high)", cursor: "pointer" }}>
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
                 </button>
               </div>
@@ -550,68 +788,78 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
             <>
               <div>
                 <input type="file" accept=".xlsx,.xls" onChange={handleFileChange} className="hidden" id="file-upload-bar" />
-                <label htmlFor="file-upload-bar" className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-black text-sm cursor-pointer transition-all border-2 border-dashed ${
-                  uploadFile ? `${theme.accentBorder} ${theme.accentBg} ${theme.accent}` : "border-white/15 text-zinc-400 hover:border-white/30 hover:text-white"
-                }`}>
-                  <Icon d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" className="w-4 h-4" />
+                <label htmlFor="file-upload-bar" style={{
+                  display: "flex", alignItems: "center", gap: 8, padding: "7px 14px", borderRadius: 2, fontWeight: 700, fontSize: 12,
+                  fontFamily: "Manrope, sans-serif", cursor: "pointer", transition: "all 0.15s",
+                  border: uploadFile ? "1px solid var(--accent-border)" : "1px dashed var(--outline-variant)",
+                  background: uploadFile ? "var(--accent-bg)" : "transparent",
+                  color: uploadFile ? "var(--accent)" : "var(--text-ghost)",
+                }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 16 }}>upload_file</span>
                   {uploadFile ? uploadFile.name : "Select .xlsx"}
                 </label>
               </div>
-              <div className="flex items-center gap-1">
-                <button onClick={() => setSelectedYear(y => y - 1)} className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 transition-all">
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <button onClick={() => setSelectedYear(y => y - 1)} style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 2, color: "var(--text-ghost)", background: "transparent", border: "1px solid var(--surface-high)", cursor: "pointer" }}>
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" /></svg>
                 </button>
-                <span className="text-sm font-black text-white w-10 text-center">{selectedYear}</span>
-                <button onClick={() => setSelectedYear(y => y + 1)} className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 transition-all">
+                <span style={{ fontSize: 13, fontWeight: 800, color: "var(--text-max)", width: 40, textAlign: "center" }}>{selectedYear}</span>
+                <button onClick={() => setSelectedYear(y => y + 1)} style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 2, color: "var(--text-ghost)", background: "transparent", border: "1px solid var(--surface-high)", cursor: "pointer" }}>
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
                 </button>
               </div>
             </>
           )}
         </div>
+          </div>
+        )}
       </div>
 
       {/* Feedback messages */}
       {uploadSuccess && (
-        <div className="mb-4 p-4 bg-emerald-500/15 border border-emerald-500/40 rounded-xl flex items-center gap-3">
-          <Icon d="M5 13l4 4L19 7" className="w-4 h-4 text-emerald-400 shrink-0" />
-          <p className="text-emerald-400 font-bold text-sm">{uploadSuccess}</p>
+        <div style={{ marginBottom: 14, padding: "12px 16px", background: "var(--accent-bg)", border: "1px solid var(--accent-bg)", borderRadius: 2, display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="material-symbols-outlined" style={{ fontSize: 16, color: "var(--accent)", flexShrink: 0 }}>check</span>
+          <p style={{ color: "var(--accent)", fontWeight: 600, fontSize: 13, margin: 0 }}>{uploadSuccess}</p>
         </div>
       )}
       {uploadError && (
-        <div className="mb-4 p-4 bg-red-500/15 border border-red-500/40 rounded-xl">
-          <p className="text-red-400 font-bold text-sm">{uploadError}</p>
+        <div style={{ marginBottom: 14, padding: "12px 16px", background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 2 }}>
+          <p style={{ color: "#f87171", fontWeight: 600, fontSize: 13, margin: 0 }}>{uploadError}</p>
         </div>
       )}
 
       {/* ── Schedule table ── */}
       {prayerLoading ? (
-        <div className="rounded-2xl border-2 border-dashed border-white/8 flex flex-col items-center justify-center text-center py-20">
-          <svg className="animate-spin h-10 w-10 mb-4 text-zinc-600" viewBox="0 0 24 24">
+        <div style={{ border: "1px dashed var(--outline-variant)", borderRadius: 2, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "80px 0" }}>
+          <svg className="animate-spin h-10 w-10 mb-4" style={{ color: "var(--text-ghost)" }} viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
           </svg>
-          <div className="text-sm text-zinc-600 font-bold">Loading prayer times…</div>
+          <div style={{ fontSize: 13, color: "var(--text-ghost)", fontWeight: 600 }}>Loading prayer times…</div>
         </div>
       ) : !prayerTimesByMonth[selectedMonth] ? (
-        <div className="rounded-2xl border-2 border-dashed border-white/8 flex flex-col items-center justify-center text-center py-20">
+        <div style={{ border: "1px dashed var(--outline-variant)", borderRadius: 2, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "80px 0" }}>
           {(() => {
             const yearHasData = months.some(m => !!prayerTimesByMonth[m.value]);
             const isGenerating = generatingYear === selectedYear;
             if (prayerSource === "backend" && !yearHasData) {
               return (
                 <>
-                  <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-5">
-                    <Icon d="M12 6v6m0 0v6m0-6h6m-6 0H6" className="w-7 h-7 text-emerald-400" />
+                  <div style={{ width: 52, height: 52, borderRadius: 2, background: "var(--surface-mid)", border: "1px solid var(--surface-high)", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 18 }}>
+                    <span className="material-symbols-outlined" style={{ fontSize: 28, color: "var(--text-ghost)" }}>add</span>
                   </div>
-                  <div className="font-black text-lg mb-1 text-white">No prayer times for {selectedYear}</div>
-                  <div className="text-sm text-zinc-500 mb-6">Generate the full year using your location and preset settings</div>
+                  <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 6, color: "var(--text-max)", letterSpacing: "-0.02em" }}>No prayer times for {selectedYear}</div>
+                  <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 24 }}>Generate the full year using your location and preset settings</div>
                   <button
                     disabled={isGenerating}
                     onClick={() => handleGenerateYear(selectedYear)}
-                    className={`flex items-center gap-2 px-6 py-3 rounded-xl font-black text-sm transition-all ${
-                      isGenerating ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 cursor-wait" : "bg-emerald-500 hover:bg-emerald-400 text-black"
-                    }`}>
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8, padding: "10px 24px", borderRadius: 2, fontWeight: 700, fontSize: 13,
+                      fontFamily: "Manrope, sans-serif", cursor: isGenerating ? "wait" : "pointer", transition: "all 0.15s",
+                      background: isGenerating ? "var(--surface-low)" : "var(--accent)",
+                      border: isGenerating ? "1px solid var(--surface-mid)" : "1px solid var(--accent)",
+                      color: isGenerating ? "var(--outline)" : "var(--accent-text)",
+                    }}>
                     {isGenerating
                       ? <><svg className="animate-spin w-4 h-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>Generating…</>
                       : <>Generate {selectedYear}</>
@@ -622,11 +870,11 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
             }
             return (
               <>
-                <Icon d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" className="w-12 h-12 mb-4 text-zinc-700" />
-                <div className="font-black text-lg mb-2 text-zinc-500">
+                <span className="material-symbols-outlined" style={{ fontSize: 48, color: "var(--outline-variant)", display: "block", marginBottom: 16 }}>schedule</span>
+                <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 6, color: "var(--text-ghost)", letterSpacing: "-0.02em" }}>
                   No schedule for {months.find(m => m.value === selectedMonth)?.label}
                 </div>
-                <div className="text-sm text-zinc-700">
+                <div style={{ fontSize: 13, color: "var(--text-dim)" }}>
                   {prayerSource === "backend" ? "Use the Adhan & Iqama panel to apply times" : "Select a file and click Upload above"}
                 </div>
               </>
@@ -634,31 +882,33 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
           })()}
         </div>
       ) : (
-        <div className="rounded-2xl border-2 bg-zinc-900/60 border-white/5">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
+        <div style={{ background: "var(--surface-low)", border: "1px solid var(--surface-mid)", borderRadius: 2 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", borderBottom: "1px solid var(--surface-high)" }}>
             <div>
-              <div className={`text-xs font-bold uppercase tracking-widest mb-1 ${theme.label}`}>Monthly Schedule</div>
-              <h2 className="text-xl font-black text-white">
+              <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", marginBottom: 4 }}>Monthly Schedule</div>
+              <h2 style={{ fontSize: 20, fontWeight: 800, color: "var(--text-max)", margin: 0, letterSpacing: "-0.02em" }}>
                 {months.find((m) => m.value === selectedMonth)?.label}
               </h2>
             </div>
-            <div className="flex items-center gap-3">
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               {scheduleEdited && !savingSchedule && (
                 <button onClick={handleDiscardChanges}
-                  className="px-4 py-2 rounded-xl font-black text-sm transition-all text-zinc-500 hover:text-white border border-white/5 hover:border-white/15">
+                  style={{ padding: "7px 14px", borderRadius: 2, fontWeight: 600, fontSize: 13, fontFamily: "Manrope, sans-serif", color: "var(--text-ghost)", border: "1px solid var(--outline-variant)", background: "transparent", cursor: "pointer", transition: "all 0.15s" }}>
                   Discard
                 </button>
               )}
               {(scheduleEdited || savingSchedule || savedSchedule) && (
                 <button onClick={handleSaveSchedule} disabled={savingSchedule}
-                  className={`flex items-center gap-1.5 px-4 py-2 rounded-xl font-black text-sm transition-all ${
-                    savedSchedule ? "bg-emerald-500/20 border border-emerald-500/40 text-emerald-400"
-                      : savingSchedule ? "bg-zinc-800 text-zinc-500 cursor-wait border border-white/5"
-                      : `${theme.btn}`
-                  }`}>
+                  style={{
+                    display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 2, fontWeight: 700, fontSize: 13, fontFamily: "Manrope, sans-serif",
+                    cursor: savingSchedule ? "wait" : "pointer", transition: "all 0.15s",
+                    background: savedSchedule ? "var(--accent-bg)" : savingSchedule ? "var(--surface-low)" : "var(--accent)",
+                    border: savedSchedule ? "1px solid var(--accent-border)" : savingSchedule ? "1px solid var(--surface-mid)" : "1px solid var(--accent)",
+                    color: savedSchedule ? "var(--accent)" : savingSchedule ? "var(--outline)" : "var(--accent-text)",
+                  }}>
                   {savingSchedule
                     ? <><svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> Saving…</>
-                    : savedSchedule ? <><Icon d="M5 13l4 4L19 7" className="w-3.5 h-3.5" /> Saved</>
+                    : savedSchedule ? <><span className="material-symbols-outlined" style={{ fontSize: 14 }}>check</span> Saved</>
                     : "Save"
                   }
                 </button>
@@ -674,121 +924,161 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
                 maghrib: [...(jamaatSettings.maghrib2 ? ["2nd"] : []), ...(jamaatSettings.maghrib3 ? ["3rd"] : [])],
                 isha:    [],
               };
-              const jummahCount = extraTimings.jummah.length;
+              const jummahCount = extraTimings.jummahSlots.filter(Boolean).length;
               const totalCols = 1 + PRAYER_META.reduce((s, p) => s + 3 + extraCols[p.key].length, 0) + jummahCount;
               const compact = totalCols > 17;
-              const tdPx = compact ? "px-1" : "px-2";
-              const thPx = compact ? "px-1.5" : "px-3";
-              const txtSz = compact ? "text-xs" : "text-sm";
-              const tableCellInputCls = `w-full bg-transparent border border-transparent hover:border-white/10 focus:border-white/25 rounded px-1 py-0.5 ${txtSz} text-zinc-400 focus:text-white focus:outline-none transition-all placeholder-zinc-700`;
+              const tdPx = compact ? "1px 4px" : "1px 8px";
+              const thPx = compact ? "6px 6px" : "8px 12px";
+              const txtSz = compact ? 11 : 13;
+              const tableCellInputStyle: React.CSSProperties = {
+                width: "100%", background: "transparent", border: "1px solid transparent", borderRadius: 2,
+                padding: compact ? "2px 4px" : "3px 6px", fontSize: txtSz, color: "#ffffff",
+                fontFamily: "Manrope, sans-serif", outline: "none", textAlign: "center", transition: "border-color 0.15s",
+              };
+              const todayStr = new Date().toISOString().split("T")[0];
+              const days = prayerTimesByMonth[selectedMonth];
+
+              if (isMobile) {
+                return (
+                  <div style={{ display: "flex", flexDirection: "column" }}>
+                    {days.map((day, i) => {
+                      const d = day as unknown as Record<string, string>;
+                      const isFriday = new Date(day.date + "T12:00:00").getDay() === 5;
+                      const isToday = day.date === todayStr;
+                      const [, mm, dd] = day.date.split("-");
+                      const weekday = new Date(day.date + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short" });
+                      return (
+                        <div key={i} style={{ borderTop: i > 0 ? "1px solid var(--surface-mid)" : undefined, background: isToday ? "rgba(52,211,153,0.04)" : undefined }}>
+                          {/* Date header */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 14px", borderLeft: isToday ? "3px solid var(--accent)" : "3px solid transparent", background: isToday ? "rgba(52,211,153,0.06)" : "var(--surface-mid)" }}>
+                            <span style={{ fontSize: 11, fontWeight: 800, color: isToday ? "var(--accent)" : "var(--text-max)" }}>{dd}/{mm}</span>
+                            <span style={{ fontSize: 10, fontWeight: 600, color: "var(--text-ghost)" }}>{weekday}</span>
+                            {isToday && <span style={{ fontSize: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--accent)", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2, padding: "1px 5px" }}>Today</span>}
+                          </div>
+                          {/* Prayer rows */}
+                          {PRAYER_META.map((p, pi) => {
+                            const start = day[p.key] as string;
+                            return (
+                              <div key={p.key} style={{ borderTop: "1px solid var(--surface-mid)" }}>
+                                {/* Column label row — only on first prayer */}
+                                {pi === 0 && (
+                                  <div style={{ display: "grid", gridTemplateColumns: "52px 1fr 1fr 1fr", padding: "3px 14px 1px" }}>
+                                    <span />
+                                    <span style={{ fontSize: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-ghost)", textAlign: "center" }}>Start</span>
+                                    <span style={{ fontSize: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--accent)", textAlign: "center" }}>Adhan</span>
+                                    <span style={{ fontSize: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--accent)", textAlign: "center" }}>Iqama</span>
+                                  </div>
+                                )}
+                                <div style={{ display: "grid", gridTemplateColumns: "52px 1fr 1fr 1fr", alignItems: "center", padding: "3px 14px" }}>
+                                  <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-ghost)" }}>{p.label}</span>
+                                  <span style={{ fontSize: 10, color: "var(--text-phantom)", textAlign: "center" }}>{to12h(start)}</span>
+                                  <LocalInput value={to12h(d[`${p.key}_adhan`] || "")} onCommit={v => handleEditCell(day.date, `${p.key}_adhan`, formatTimeInput(v))} placeholder="—" className="" style={{ ...tableCellInputStyle, fontSize: 10 }} />
+                                  <LocalInput value={to12h(d[`${p.key}_iqama`] || "")} onCommit={v => handleEditCell(day.date, `${p.key}_iqama`, formatTimeInput(v))} placeholder="—" className="" style={{ ...tableCellInputStyle, fontSize: 10 }} />
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {/* Jummah rows — Fridays only */}
+                          {isFriday && extraTimings.jummahSlots.some(Boolean) && (
+                            <div style={{ display: "flex", gap: 8, padding: "6px 14px", borderTop: "1px solid var(--surface-mid)", background: "rgba(52,211,153,0.03)" }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", width: 64, flexShrink: 0 }}>Jummah</span>
+                              {extraTimings.jummahSlots.map((on, j) => on ? (
+                                <div key={j} style={{ flex: 1 }}>
+                                  <div style={{ fontSize: 9, fontWeight: 700, color: "var(--accent)", marginBottom: 2, textAlign: "center" }}>{j + 1}</div>
+                                  <LocalInput value={d[`jummah_${j + 1}`] || ""} onCommit={v => handleEditCell(day.date, `jummah_${j + 1}`, formatTimeInput(v))} placeholder="—" className="" style={{ ...tableCellInputStyle, fontSize: 11, color: "var(--accent)", fontWeight: 700 }} />
+                                </div>
+                              ) : null)}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              }
+
               return (
-                <table className="w-full border-collapse" style={{ tableLayout: "fixed" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
                   <thead>
-                    <tr className="border-b border-white/8">
-                      <th className={`py-3 px-3 ${txtSz} font-black uppercase tracking-widest text-zinc-500 text-left`} style={{ width: compact ? "52px" : "72px" }}>Date</th>
+                    <tr style={{ borderBottom: "1px solid var(--surface-high)", background: "var(--surface-mid)" }}>
+                      <th style={{ padding: thPx, fontSize: txtSz, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", textAlign: "center", width: compact ? 52 : 72 }}>Date</th>
                       {PRAYER_META.map((p) => (
                         <th key={p.key} colSpan={3 + extraCols[p.key].length}
-                          className={`py-3 ${thPx} ${txtSz} font-black uppercase tracking-widest text-zinc-500 text-center border-l border-white/8`}>
+                          style={{ padding: thPx, fontSize: txtSz, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", textAlign: "center", borderLeft: "1px solid var(--surface-high)" }}>
                           {p.label}
                         </th>
                       ))}
                       {jummahCount > 0 && (
                         <th colSpan={jummahCount}
-                          className={`py-3 ${thPx} ${txtSz} font-black uppercase tracking-widest text-zinc-500 text-center border-l border-white/8`}>
+                          style={{ padding: thPx, fontSize: txtSz, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", textAlign: "center", borderLeft: "1px solid var(--surface-high)" }}>
                           Jummah
                         </th>
                       )}
                     </tr>
-                    <tr className="border-b-2 border-white/10">
+                    <tr style={{ borderBottom: "1px solid var(--surface-high)", background: "var(--surface-mid)" }}>
                       <th />
                       {PRAYER_META.map((p) => (
                         <React.Fragment key={p.key}>
-                          <th className={`py-2 ${thPx} ${txtSz} font-bold text-center border-l border-white/8 text-zinc-600`}>Start</th>
-                          <th className={`py-2 ${thPx} ${txtSz} font-bold text-center text-zinc-600`}>Adhan</th>
-                          <th className={`py-2 ${thPx} ${txtSz} font-bold text-center text-zinc-600`}>Iqama</th>
+                          <th style={{ padding: thPx, fontSize: txtSz, fontWeight: 600, textAlign: "center", borderLeft: "1px solid var(--surface-high)", color: "var(--text-phantom)" }}>Start</th>
+                          <th style={{ padding: thPx, fontSize: txtSz, fontWeight: 600, textAlign: "center", color: "var(--text-phantom)" }}>Adhan</th>
+                          <th style={{ padding: thPx, fontSize: txtSz, fontWeight: 600, textAlign: "center", color: "var(--text-phantom)" }}>Iqama</th>
                           {extraCols[p.key].map(n => (
-                            <th key={n} className={`py-2 ${thPx} ${txtSz} font-bold text-center text-zinc-600`}>{n} Jamaat</th>
+                            <th key={n} style={{ padding: thPx, fontSize: txtSz, fontWeight: 600, textAlign: "center", color: "var(--text-phantom)" }}>{n} Jamaat</th>
                           ))}
                         </React.Fragment>
                       ))}
-                      {Array.from({ length: jummahCount }, (_, i) => (
-                        <th key={i} className={`py-2 ${thPx} ${txtSz} font-bold text-center border-l border-white/8 text-zinc-600`}>
+                      {extraTimings.jummahSlots.map((on, i) => on ? (
+                        <th key={i} style={{ padding: thPx, fontSize: txtSz, fontWeight: 600, textAlign: "center", borderLeft: "1px solid var(--surface-high)", color: "var(--text-phantom)" }}>
                           Khutbah {i + 1}
                         </th>
-                      ))}
+                      ) : null)}
                     </tr>
                   </thead>
                   <tbody>
-                    {prayerTimesByMonth[selectedMonth].map((day, i) => {
+                    {days.map((day, i) => {
                       const d = day as unknown as Record<string, string>;
                       const isFriday = new Date(day.date + "T12:00:00").getDay() === 5;
+                      const isToday = day.date === todayStr;
                       return (
-                        <tr key={i} className="border-b border-white/5 hover:bg-white/[0.02] transition-all">
-                          <td className={`py-2 px-2 font-black ${txtSz} text-white`}>
+                        <tr key={i} style={{ borderBottom: "1px solid var(--surface-mid)", background: isToday ? "rgba(52,211,153,0.05)" : i % 2 === 0 ? "var(--surface-low)" : "var(--surface)" }}>
+                          <td style={{ padding: compact ? "5px 6px" : "6px 8px", fontWeight: 700, fontSize: txtSz, color: "var(--text-max)", textAlign: "center" }}>
                             {day.date.split("-").slice(1).join("/")}
                           </td>
                           {PRAYER_META.map((p) => {
                             const start = day[p.key] as string;
                             return (
                               <React.Fragment key={p.key}>
-                                {/* Start time — read-only */}
-                                <td className={`py-2 ${tdPx} border-l border-white/5 font-bold ${txtSz} text-zinc-400 text-center`}>
+                                <td style={{ padding: tdPx, borderLeft: "1px solid var(--surface-mid)", fontWeight: 600, fontSize: txtSz, color: "var(--text-phantom)", textAlign: "center" }}>
                                   {to12h(start)}
                                 </td>
-                                {/* Adhan */}
-                                <td className={`py-2 ${tdPx} ${txtSz} text-center`}>
-                                  <LocalInput
-                                    value={d[`${p.key}_adhan`] || ""}
-                                    onCommit={v => handleEditCell(day.date, `${p.key}_adhan`, formatTimeInput(v))}
-                                    placeholder="—"
-                                    className={tableCellInputCls + " text-center"}
-                                  />
+                                <td style={{ padding: tdPx, textAlign: "center" }}>
+                                  <LocalInput value={to12h(d[`${p.key}_adhan`] || "")} onCommit={v => handleEditCell(day.date, `${p.key}_adhan`, formatTimeInput(v))} placeholder="—" className="" style={tableCellInputStyle} />
                                 </td>
-                                {/* Iqama */}
-                                <td className={`py-2 ${tdPx} ${txtSz} text-center`}>
-                                  <LocalInput
-                                    value={d[`${p.key}_iqama`] || ""}
-                                    onCommit={v => handleEditCell(day.date, `${p.key}_iqama`, formatTimeInput(v))}
-                                    placeholder="—"
-                                    className={tableCellInputCls + " text-center"}
-                                  />
+                                <td style={{ padding: tdPx, textAlign: "center" }}>
+                                  <LocalInput value={to12h(d[`${p.key}_iqama`] || "")} onCommit={v => handleEditCell(day.date, `${p.key}_iqama`, formatTimeInput(v))} placeholder="—" className="" style={tableCellInputStyle} />
                                 </td>
-                                {/* Extra jamaats */}
                                 {extraCols[p.key].map((n) => {
                                   const field = `${p.key}_iqama_${n === "2nd" ? 2 : 3}`;
                                   return (
-                                    <td key={n} className={`py-2 ${tdPx} ${txtSz} text-center`}>
-                                      <LocalInput
-                                        value={d[field] || ""}
-                                        onCommit={v => handleEditCell(day.date, field, formatTimeInput(v))}
-                                        placeholder="—"
-                                        className={tableCellInputCls + " text-center"}
-                                      />
+                                    <td key={n} style={{ padding: tdPx, textAlign: "center" }}>
+                                      <LocalInput value={to12h(d[field] || "")} onCommit={v => handleEditCell(day.date, field, formatTimeInput(v))} placeholder="—" className="" style={tableCellInputStyle} />
                                     </td>
                                   );
                                 })}
                               </React.Fragment>
                             );
                           })}
-                          {/* Jummah cells — editable on Fridays only */}
-                          {Array.from({ length: jummahCount }, (_, j) => {
+                          {extraTimings.jummahSlots.map((on, j) => on ? (() => {
                             const field = `jummah_${j + 1}`;
                             const val = d[field] || "";
                             return (
-                              <td key={j} className={`py-2 ${tdPx} ${txtSz} border-l border-white/5`}>
+                              <td key={j} style={{ padding: tdPx, borderLeft: "1px solid var(--surface-mid)" }}>
                                 {isFriday ? (
-                                  <LocalInput
-                                    value={val}
-                                    onCommit={v => handleEditCell(day.date, field, formatTimeInput(v))}
-                                    placeholder="—"
-                                    className={`w-full bg-transparent border border-transparent hover:border-white/10 focus:border-white/25 rounded px-1 py-0.5 ${txtSz} font-bold focus:outline-none transition-all placeholder-zinc-700 text-center ${theme.accent}`}
-                                  />
-                                ) : (
-                                  <span className="text-zinc-700 px-1">—</span>
-                                )}
+                                  <LocalInput value={to12h(val)} onCommit={v => handleEditCell(day.date, field, formatTimeInput(v))} placeholder="—" className="" style={{ ...tableCellInputStyle, color: "var(--accent)", fontWeight: 700 }} />
+                                ) : null}
                               </td>
                             );
-                          })}
+                          })() : null)}
                         </tr>
                       );
                     })}
@@ -815,7 +1105,7 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
 
         const sel = (key: string) => (
           <select
-            className="w-full bg-zinc-950 border border-white/8 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500/40 transition-colors appearance-none"
+            style={{ width: "100%", background: "var(--surface-low)", border: "1px solid var(--outline-variant)", borderRadius: 2, padding: "6px 10px", fontSize: 12, color: "var(--text-max)", fontFamily: "Manrope, sans-serif", outline: "none", appearance: "none" }}
             value={colMap[key] ?? ""}
             onChange={e => setColMap(m => ({ ...m, [key]: e.target.value }))}
           >
@@ -846,20 +1136,20 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
         };
 
         return (
-          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" style={{ backdropFilter: "blur(8px)", backgroundColor: "rgba(0,0,0,0.88)" }}>
-            <div className="w-full max-w-5xl bg-zinc-900 border border-white/8 rounded-3xl shadow-2xl flex flex-col overflow-hidden" style={{ height: "90vh" }}>
+          <div style={{ position: "fixed", inset: 0, zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(8px)", backgroundColor: "rgba(0,0,0,0.88)" }}>
+            <div style={{ width: "100%", maxWidth: "64rem", background: "var(--surface-low)", border: "1px solid var(--surface-mid)", borderRadius: 2, boxShadow: "0 25px 60px rgba(0,0,0,0.7)", display: "flex", flexDirection: "column", overflow: "hidden", height: "90vh" }}>
 
               {/* Header */}
-              <div className="flex items-center gap-4 px-8 py-4 border-b border-white/5">
-                <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 flex items-center justify-center shrink-0">
-                  <Icon d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" className={`w-5 h-5 ${theme.accent}`} />
+              <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 28px", borderBottom: "1px solid var(--surface-high)" }}>
+                <div style={{ width: 38, height: 38, borderRadius: 2, background: "var(--accent-bg)", border: "1px solid var(--accent-bg)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 20, color: "var(--accent)" }}>upload_file</span>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <h2 className="text-lg font-black">Map Columns</h2>
-                  <p className="text-xs text-zinc-500 mt-0.5 truncate">{uploadFile?.name}</p>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <h2 style={{ fontSize: 15, fontWeight: 800, color: "var(--text-max)", margin: 0, letterSpacing: "-0.02em" }}>Map Columns</h2>
+                  <p style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2, marginBottom: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{uploadFile?.name}</p>
                 </div>
                 {xlsxPreview.sheets.length > 1 && (
-                  <div className="flex items-center gap-1.5 bg-zinc-800/60 border border-white/8 rounded-xl p-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: 3, background: "var(--surface-low)", border: "1px solid var(--surface-high)", borderRadius: 2, padding: 3 }}>
                     {xlsxPreview.sheets.map(s => (
                       <button key={s} onClick={() => {
                         const newRows = xlsxPreview.sheetRows[s];
@@ -867,14 +1157,19 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
                         const hi = newRows.findIndex(r => r.some(c => keywords.some(k => String(c ?? "").toLowerCase().includes(k))));
                         setXlsxPreview(p => p ? { ...p, selectedSheet: s, headerRowIdx: Math.max(0, hi) } : p);
                         if (hi >= 0) autoMapColumns(newRows[hi].map(h => String(h ?? "").trim()));
-                      }} className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${xlsxPreview.selectedSheet === s ? `${theme.accentBg} ${theme.accent}` : "text-zinc-500 hover:text-white"}`}>
+                      }} style={{
+                        padding: "5px 12px", borderRadius: 2, fontSize: 12, fontWeight: 700, fontFamily: "Manrope, sans-serif", cursor: "pointer", transition: "all 0.15s",
+                        background: xlsxPreview.selectedSheet === s ? "var(--accent-bg)" : "transparent",
+                        border: xlsxPreview.selectedSheet === s ? "1px solid var(--accent-border)" : "1px solid transparent",
+                        color: xlsxPreview.selectedSheet === s ? "var(--accent)" : "var(--text-ghost)",
+                      }}>
                         {s}
                       </button>
                     ))}
                   </div>
                 )}
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs text-zinc-500 font-bold">Header row</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  <span style={{ fontSize: 11, color: "var(--text-dim)", fontWeight: 600 }}>Header row</span>
                   <input type="number" min={1} max={rows.length}
                     value={xlsxPreview.headerRowIdx + 1}
                     onChange={e => {
@@ -882,33 +1177,37 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
                       setXlsxPreview(p => p ? { ...p, headerRowIdx: idx } : p);
                       autoMapColumns((rows[idx] ?? []).map(h => String(h ?? "").trim()));
                     }}
-                    className="w-14 bg-zinc-800 border border-white/10 rounded-lg px-2 py-1.5 text-sm text-white text-center focus:outline-none focus:border-emerald-500/40"
+                    style={{ width: 52, background: "var(--surface-low)", border: "1px solid var(--outline-variant)", borderRadius: 2, padding: "5px 8px", fontSize: 13, color: "var(--text-max)", textAlign: "center", outline: "none", fontFamily: "Manrope, sans-serif" }}
                   />
                 </div>
-                <button onClick={() => { setXlsxPreview(null); }} className="w-8 h-8 flex items-center justify-center rounded-xl text-zinc-500 hover:text-white hover:bg-white/8 transition-all shrink-0">
+                <button onClick={() => { setXlsxPreview(null); }} style={{ width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 2, color: "var(--text-ghost)", background: "transparent", border: "1px solid var(--surface-high)", cursor: "pointer", flexShrink: 0 }}>
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>
               </div>
 
-              <div className="flex flex-col flex-1 overflow-hidden">
+              <div style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
 
                 {/* Top half: data preview */}
-                <div className="flex flex-col border-b border-white/5" style={{ flex: "0 0 40%" }}>
-                  <div className="flex items-center gap-2 px-7 pt-3 pb-2 shrink-0">
-                    <span className="text-xs font-black uppercase tracking-widest text-zinc-500">Data Preview</span>
-                    <span className="text-[10px] text-zinc-700 font-bold">· first 5 rows after header</span>
+                <div style={{ display: "flex", flexDirection: "column", borderBottom: "1px solid var(--surface-high)", flex: "0 0 40%" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 24px 6px", flexShrink: 0 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)" }}>Data Preview</span>
+                    <span style={{ fontSize: 10, color: "var(--text-phantom)", fontWeight: 600 }}>· first 5 rows after header</span>
                   </div>
                   {headers.length > 0 ? (
-                    <div className="overflow-auto flex-1 px-5 pb-4">
-                      <table className="text-xs border-collapse w-max min-w-full">
+                    <div style={{ overflow: "auto", flex: 1, padding: "0 16px 14px" }}>
+                      <table style={{ fontSize: 11, borderCollapse: "collapse", width: "max-content", minWidth: "100%" }}>
                         <thead>
                           <tr>
                             {headers.map((h, i) => {
                               const label = colLabel(h);
                               return (
-                                <th key={i} className={`px-4 py-2 text-left whitespace-nowrap border-b ${label ? "border-emerald-500/25 bg-emerald-500/5" : "border-white/5"}`}>
-                                  <div className={`font-black ${label ? theme.accent : "text-zinc-500"}`}>{h}</div>
-                                  {label && <div className={`text-[9px] font-black uppercase tracking-widest mt-0.5 opacity-60 ${theme.accent}`}>{label}</div>}
+                                <th key={i} style={{
+                                  padding: "7px 14px", textAlign: "left", whiteSpace: "nowrap",
+                                  borderBottom: label ? "1px solid var(--accent-bg)" : "1px solid var(--surface-high)",
+                                  background: label ? "var(--accent-bg)" : "transparent",
+                                }}>
+                                  <div style={{ fontWeight: 700, color: label ? "var(--accent)" : "var(--text-ghost)" }}>{h}</div>
+                                  {label && <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", marginTop: 2, opacity: 0.7, color: "var(--accent)" }}>{label}</div>}
                                 </th>
                               );
                             })}
@@ -916,9 +1215,9 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
                         </thead>
                         <tbody>
                           {previewRows.map((row, ri) => (
-                            <tr key={ri} className={ri % 2 === 0 ? "" : "bg-white/[0.02]"}>
+                            <tr key={ri} style={{ background: ri % 2 === 0 ? "var(--surface-low)" : "var(--surface)" }}>
                               {headers.map((h, ci) => (
-                                <td key={ci} className={`px-4 py-1.5 whitespace-nowrap border-b border-white/[0.03] ${mappedSet.has(h) ? "text-white font-semibold" : "text-zinc-600"}`}>
+                                <td key={ci} style={{ padding: "5px 14px", whiteSpace: "nowrap", borderBottom: "1px solid var(--surface-mid)", color: mappedSet.has(h) ? "var(--text-max)" : "var(--text-phantom)", fontWeight: mappedSet.has(h) ? 600 : 400 }}>
                                   {String(row[ci] ?? "")}
                                 </td>
                               ))}
@@ -928,41 +1227,39 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
                       </table>
                     </div>
                   ) : (
-                    <div className="flex-1 flex items-center justify-center text-zinc-600 text-sm px-7">
+                    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-ghost)", fontSize: 13, padding: "0 24px" }}>
                       No headers found at row {xlsxPreview.headerRowIdx + 1} — try a different header row number.
                     </div>
                   )}
                 </div>
 
                 {/* Bottom half: column mapping */}
-                <div className="flex-1 px-7 py-4 flex flex-col justify-between">
+                <div style={{ flex: 1, padding: "14px 24px", display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
 
                   {/* Date */}
-                  <div className="flex items-center gap-4 mb-3">
-                    <div className="w-24 shrink-0 flex items-center gap-1.5">
-                      <div className="w-1.5 h-3 rounded-full bg-blue-400/60 shrink-0"></div>
-                      <span className="text-xs font-black text-zinc-300">Date</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 10 }}>
+                    <div style={{ width: 90, flexShrink: 0, display: "flex", alignItems: "center", gap: 6 }}>
+                      <div style={{ width: 4, height: 12, borderRadius: 2, background: "rgba(96,165,250,0.5)", flexShrink: 0 }} />
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-max)" }}>Date</span>
                     </div>
-                    <div className="w-52">{sel("date")}</div>
-                    <span className="text-[10px] text-zinc-700 font-bold">YYYY-MM-DD · DD/MM/YYYY · Excel serial</span>
+                    <div style={{ width: 200 }}>{sel("date")}</div>
+                    <span style={{ fontSize: 10, color: "var(--text-phantom)", fontWeight: 600 }}>YYYY-MM-DD · DD/MM/YYYY · Excel serial</span>
                   </div>
 
-                  <div className="border-t border-white/5 mb-3" />
+                  <div style={{ borderTop: "1px solid var(--surface-high)", marginBottom: 10 }} />
 
                   {/* Prayer rows */}
-                  <div className="flex flex-col gap-1.5 mb-3">
-                    <div className="grid gap-3 items-center mb-1" style={{ gridTemplateColumns: "96px 1fr 1fr" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+                    <div style={{ display: "grid", gap: 10, alignItems: "center", marginBottom: 4, gridTemplateColumns: "90px 1fr 1fr" }}>
                       <div />
-                      <div className="text-[10px] font-black uppercase tracking-widest text-zinc-600 text-center">Adhan / Start</div>
-                      <div className="text-[10px] font-black uppercase tracking-widest text-zinc-600 text-center">Iqama</div>
+                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", textAlign: "center" }}>Adhan / Start</div>
+                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", textAlign: "center" }}>Iqama</div>
                     </div>
                     {PRAYER_ROWS.map(p => (
-                      <div key={p.key} className="grid gap-3 items-center" style={{ gridTemplateColumns: "96px 1fr 1fr" }}>
-                        <div className="flex items-center gap-1.5">
-                          <div className="w-1.5 h-3 rounded-full bg-emerald-400/60 shrink-0"></div>
+                      <div key={p.key} style={{ display: "grid", gap: 10, alignItems: "center", gridTemplateColumns: "90px 1fr 1fr" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                           <div>
-                            <div className="text-sm font-black text-white leading-tight">{p.label}</div>
-                            <div className="text-[10px] text-zinc-600" style={{ fontFamily: "serif" }}>{p.arabic}</div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-max)", lineHeight: 1.2 }}>{p.label}</div>
                           </div>
                         </div>
                         {sel(p.key)}
@@ -971,18 +1268,18 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
                     ))}
                   </div>
 
-                  <div className="border-t border-white/5 mb-3" />
+                  <div style={{ borderTop: "1px solid var(--surface-high)", marginBottom: 10 }} />
 
                   {/* Jummah */}
-                  <div className="flex items-center gap-4">
-                    <div className="w-24 shrink-0 flex items-center gap-1.5">
-                      <div className="w-1.5 h-3 rounded-full bg-amber-400/60 shrink-0"></div>
-                      <span className="text-xs font-black text-zinc-300">Jummah</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                    <div style={{ width: 90, flexShrink: 0, display: "flex", alignItems: "center", gap: 6 }}>
+                      <div style={{ width: 4, height: 12, borderRadius: 2, background: "rgba(251,191,36,0.4)", flexShrink: 0 }} />
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-max)" }}>Jummah</span>
                     </div>
-                    <div className="flex gap-3 flex-1">
+                    <div style={{ display: "flex", gap: 10, flex: 1 }}>
                       {JUMMAH_FIELDS.map(f => (
-                        <div key={f.key} className="flex-1">
-                          <label className="text-[10px] font-bold text-zinc-600 mb-1 block">{f.label}</label>
+                        <div key={f.key} style={{ flex: 1 }}>
+                          <label style={{ fontSize: 10, fontWeight: 700, color: "var(--accent)", marginBottom: 4, display: "block" }}>{f.label}</label>
                           {sel(f.key)}
                         </div>
                       ))}
@@ -993,19 +1290,25 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
               </div>
 
               {/* Footer */}
-              <div className="flex items-center gap-4 px-8 py-3 border-t border-white/5">
+              <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 28px", borderTop: "1px solid var(--surface-high)" }}>
                 {uploadError
-                  ? <p className="text-red-400 text-sm font-bold flex-1">{uploadError}</p>
-                  : <p className="text-zinc-600 text-xs flex-1">Highlighted columns will be imported. Unmapped prayers use auto-calculated defaults.</p>
+                  ? <p style={{ color: "#f87171", fontSize: 13, fontWeight: 600, flex: 1, margin: 0 }}>{uploadError}</p>
+                  : <p style={{ color: "var(--text-ghost)", fontSize: 11, flex: 1, margin: 0 }}>Highlighted columns will be imported. Unmapped prayers use auto-calculated defaults.</p>
                 }
-                <button onClick={() => { setXlsxPreview(null); }} className="px-5 py-2.5 rounded-xl font-bold border border-white/8 text-zinc-400 hover:bg-white/5 hover:text-white transition-all text-sm">
+                <button onClick={() => { setXlsxPreview(null); }} style={{ padding: "8px 18px", borderRadius: 2, fontWeight: 600, fontSize: 13, fontFamily: "Manrope, sans-serif", border: "1px solid var(--outline-variant)", color: "var(--text-ghost)", background: "transparent", cursor: "pointer", transition: "all 0.15s" }}>
                   Cancel
                 </button>
                 <button onClick={handleConfirmImport} disabled={isUploading || !colMap.date}
-                  className={`px-7 py-2.5 rounded-xl font-black text-sm transition-all flex items-center gap-2 ${isUploading || !colMap.date ? "bg-zinc-800 text-zinc-600 cursor-not-allowed" : `${theme.btn} hover:scale-[1.02]`}`}>
+                  style={{
+                    padding: "8px 26px", borderRadius: 2, fontWeight: 700, fontSize: 13, fontFamily: "Manrope, sans-serif", cursor: isUploading || !colMap.date ? "not-allowed" : "pointer",
+                    display: "flex", alignItems: "center", gap: 8, transition: "all 0.15s",
+                    background: isUploading || !colMap.date ? "var(--surface-low)" : "var(--accent)",
+                    border: isUploading || !colMap.date ? "1px solid var(--surface-mid)" : "1px solid var(--accent)",
+                    color: isUploading || !colMap.date ? "var(--outline)" : "var(--accent-text)",
+                  }}>
                   {isUploading
                     ? <><svg className="animate-spin w-4 h-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>Importing…</>
-                    : <>Import <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg></>
+                    : <>Import <span className="material-symbols-outlined" style={{ fontSize: 16 }}>arrow_forward</span></>
                   }
                 </button>
               </div>

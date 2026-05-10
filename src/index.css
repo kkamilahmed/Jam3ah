@@ -1,36 +1,160 @@
 @import "tailwindcss";
 
+/* ── Mobile responsive overrides ────────────────────────────────────────── */
+@media (max-width: 767px) {
+  /* Reduce tab content padding on phones */
+  [data-tab-content] > div:first-child {
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+  }
+
+  /* Prevent horizontal overflow on dashboard */
+  .dashboard-root {
+    overflow-x: hidden;
+  }
+
+  /* Responsive grids in settings/overview */
+  .responsive-2col {
+    grid-template-columns: 1fr !important;
+  }
+  .responsive-3col {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ── Color tokens (dark = default) ──────────────────────────────────────── */
+:root {
+  /* Backgrounds */
+  --bg:               #0e0e0e;
+  --surface:          #111111;
+  --surface-low:      #131313;
+  --surface-mid:      #181818;
+  --surface-high:     #1f2020;
+  --surface-highest:  #252626;
+
+  /* Text */
+  --text-max:         #ffffff;
+  --on-surface:       #c6c6c7;
+  --on-surface-variant: #acabaa;
+  --text-dim:         #8a8a8a;
+  --text-faint:       #6a6a6a;
+  --text-ghost:       #5a5a5a;
+  --text-phantom:     #4a4a4a;
+
+  /* Borders */
+  --outline:          #3a3a3a;
+  --outline-variant:  #2a2a2a;
+  --outline-subtle:   #1e1e1e;
+
+  /* Accent (emerald) */
+  --accent:               #34d399;
+  --accent-bg:            rgba(52,211,153,0.08);
+  --accent-border:        rgba(52,211,153,0.25);
+  --accent-border-strong: rgba(52,211,153,0.4);
+  --accent-light:         #6ee7b7;
+  --accent-text:          #0a0a0a;
+
+  /* Nav (semi-transparent) */
+  --nav-bg: rgba(14,14,14,0.92);
+}
+
+/* ── Light mode overrides ────────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg:               #f5f5f5;
+  --surface:          #ffffff;
+  --surface-low:      #f0f0f0;
+  --surface-mid:      #e8e8e8;
+  --surface-high:     #dedede;
+  --surface-highest:  #d0d0d0;
+
+  --text-max:         #0f0f0f;
+  --on-surface:       #1c1c1e;
+  --on-surface-variant: #3a3a3c;
+  --text-dim:         #6e6e73;
+  --text-faint:       #8e8e93;
+  --text-ghost:       #aeaeb2;
+  --text-phantom:     #c7c7cc;
+
+  --outline:          #c0c0c5;
+  --outline-variant:  #d1d1d6;
+  --outline-subtle:   #e5e5ea;
+
+  --accent:               #059669;
+  --accent-bg:            rgba(5,150,105,0.1);
+  --accent-border:        rgba(5,150,105,0.3);
+  --accent-border-strong: rgba(5,150,105,0.5);
+  --accent-light:         #047857;
+  --accent-text:          #ffffff;
+
+  --nav-bg: rgba(245,245,245,0.92);
+}
+
+* {
+  font-family: 'Manrope', system-ui, sans-serif;
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--on-surface);
+}
+
+/* Material Symbols baseline alignment */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 24;
+  line-height: 1;
+  font-size: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
 /* Styled scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 999px;
+  background: var(--outline-subtle);
+  border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--outline-variant);
 }
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-/* Dark date/month inputs */
+/* Hide number input spinners */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* Date/month inputs */
 input[type="date"],
 input[type="month"] {
   color-scheme: dark;
 }
+[data-theme="light"] input[type="date"],
+[data-theme="light"] input[type="month"] {
+  color-scheme: light;
+}
 input[type="date"]::-webkit-calendar-picker-indicator,
 input[type="month"]::-webkit-calendar-picker-indicator {
-  filter: invert(0.5);
+  filter: invert(0.4);
   cursor: pointer;
   opacity: 0.5;
 }
 input[type="date"]::-webkit-calendar-picker-indicator:hover,
 input[type="month"]::-webkit-calendar-picker-indicator:hover {
-  opacity: 1;
+  opacity: 0.8;
 }

@@ -5,12 +5,13 @@ const LocalInput: React.FC<{
   onCommit: (v: string) => void;
   type?: string;
   className?: string;
+  style?: React.CSSProperties;
   placeholder?: string;
   min?: string | number;
   max?: string | number;
   step?: string | number;
   readOnly?: boolean;
-}> = ({ value, onCommit, type = "text", className, placeholder, min, max, step, readOnly }) => {
+}> = ({ value, onCommit, type = "text", className, style, placeholder, min, max, step, readOnly }) => {
   const [local, setLocal] = React.useState(value);
   React.useEffect(() => { setLocal(value); }, [value]);
   return (
@@ -21,6 +22,7 @@ const LocalInput: React.FC<{
       onBlur={e => onCommit(e.target.value)}
       placeholder={placeholder}
       className={className}
+      style={style}
       readOnly={readOnly}
       min={min}
       max={max}

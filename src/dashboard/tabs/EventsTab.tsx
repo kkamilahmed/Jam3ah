@@ -1,12 +1,11 @@
 import React from "react";
 import { supabaseAdmin } from "../../lib/supabase";
 import type { Event, EventForm, Announcement } from "../types";
-import { THEMES, type ThemeKey } from "../themes";
+import type { THEMES, ThemeKey } from "../themes";
 import { to12h, formatTimeInput } from "../utils";
-import { makeInputCls, labelCls } from "../constants";
-import { Icon } from "../components/Icon";
 import LocalInput from "../components/LocalInput";
 import DatePicker from "../components/DatePicker";
+import useIsMobile from "../../hooks/useIsMobile";
 
 interface EventsTabProps {
   theme: typeof THEMES[ThemeKey];
@@ -32,32 +31,26 @@ interface EventsTabProps {
   handleEditEvent: (event: Event) => void;
 }
 
+const inp: React.CSSProperties = {
+  width: "100%", padding: "10px 12px", background: "var(--surface-low)",
+  border: "1px solid var(--outline-variant)", borderRadius: 2, color: "var(--on-surface)",
+  fontFamily: "Manrope, sans-serif", fontSize: 13, fontWeight: 500,
+  outline: "none", transition: "border-color 0.15s", boxSizing: "border-box",
+};
+const lbl: React.CSSProperties = { display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-ghost)", marginBottom: 6 };
+
 const EventsTab: React.FC<EventsTabProps> = ({
-  theme,
-  events,
-  setEvents: _setEvents,
-  eventsLoading,
-  eventsSubTab,
-  setEventsSubTab,
-  announcements,
-  setAnnouncements,
-  editingEvent,
-  setEditingEvent,
-  editingAnnouncement,
-  setEditingAnnouncement,
-  announcementForm,
-  setAnnouncementForm,
-  eventForm,
-  setEventForm,
-  eventsPanel,
-  setEventsPanel,
-  handleEventSubmit,
-  handleDeleteEvent,
-  handleEditEvent,
+  events, setEvents: _setEvents, eventsLoading, eventsSubTab, setEventsSubTab,
+  announcements, setAnnouncements, editingEvent, setEditingEvent,
+  editingAnnouncement, setEditingAnnouncement, announcementForm, setAnnouncementForm,
+  eventForm, setEventForm, eventsPanel, setEventsPanel,
+  handleEventSubmit, handleDeleteEvent, handleEditEvent,
 }) => {
-  const inputCls = makeInputCls(theme.inputFocus);
   const today = new Date().toISOString().slice(0, 10);
   const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+  const isMobile = useIsMobile();
+
+  const navH = 60;
 
   const openNewEvent = () => {
     setEditingEvent(null);
@@ -77,112 +70,237 @@ const EventsTab: React.FC<EventsTabProps> = ({
 
   const sortedAnnouncements = [...announcements].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
-  return (
-    <div className="flex" style={{ minHeight: "calc(100vh - 73px)" }}>
+  const formPanel = (
+    <div style={{ padding: isMobile ? "20px 16px 40px" : "28px 28px" }}>
+      {/* Panel header */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24 }}>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 600, color: "var(--outline)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+            {eventsSubTab === "events" ? "Event" : "Announcement"}
+          </div>
+          <h2 style={{ fontSize: 18, fontWeight: 800, color: "var(--on-surface)", margin: 0 }}>
+            {eventsSubTab === "events"
+              ? (editingEvent ? "Edit Event" : "New Event")
+              : (editingAnnouncement ? "Edit Announcement" : "New Announcement")}
+          </h2>
+        </div>
+        <button onClick={closePanel}
+          style={{ width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--surface-mid)", border: "1px solid var(--outline-variant)", borderRadius: 2, cursor: "pointer" }}>
+          <span className="material-symbols-outlined" style={{ fontSize: 16, color: "var(--text-ghost)" }}>close</span>
+        </button>
+      </div>
 
-      {/* ── Left: List panel ── */}
-      <div
-        className="flex-1 overflow-y-auto border-r border-transparent"
-        style={{
-          maxHeight: "calc(100vh - 73px)",
-          borderRightColor: eventsPanel ? "rgba(255,255,255,0.08)" : "transparent",
-          transition: "border-color 0.35s ease",
-        }}
-      >
-        <div className="px-8 py-8">
+      {/* Event form */}
+      {eventsSubTab === "events" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div>
+            <label style={lbl}>Title <span style={{ color: "#f87171" }}>*</span></label>
+            <LocalInput type="text" placeholder="e.g. Friday Khutbah" value={eventForm.title}
+              onCommit={v => setEventForm(p => ({ ...p, title: v }))}
+              className="" style={inp} />
+          </div>
+          <div>
+            <label style={lbl}>Description</label>
+            <textarea rows={3} placeholder="Describe the event..." value={eventForm.description}
+              onChange={e => setEventForm(p => ({ ...p, description: e.target.value }))}
+              style={{ ...inp, resize: "none" }} />
+          </div>
+          <div>
+            <label style={lbl}>Date <span style={{ color: "#f87171" }}>*</span></label>
+            <DatePicker value={eventForm.date} onChange={v => setEventForm(p => ({ ...p, date: v }))} placeholder="Select date" align="left" fullWidth />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <label style={lbl}>Start Time <span style={{ color: "#f87171" }}>*</span></label>
+              <LocalInput type="text" placeholder="1:30 PM" value={eventForm.time}
+                onCommit={v => setEventForm(p => ({ ...p, time: formatTimeInput(v) || v }))}
+                className="" style={inp} />
+            </div>
+            <div>
+              <label style={lbl}>End Time</label>
+              <LocalInput type="text" placeholder="3:00 PM" value={eventForm.endTime}
+                onCommit={v => setEventForm(p => ({ ...p, endTime: formatTimeInput(v) || v }))}
+                className="" style={inp} />
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 10, paddingTop: 6 }}>
+            <button onClick={closePanel}
+              style={{ flex: 1, padding: "11px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, color: "var(--text-ghost)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Cancel</button>
+            <button onClick={handleEventSubmit}
+              style={{ flex: 1, padding: "11px", background: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 2, color: "var(--accent-text)", fontFamily: "Manrope, sans-serif", fontWeight: 700, fontSize: 13, cursor: "pointer" }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "var(--accent-light)"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "var(--accent)"; }}>
+              {editingEvent ? "Save Changes" : "Create Event"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Announcement form */}
+      {eventsSubTab === "announcements" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div>
+            <label style={lbl}>Title <span style={{ color: "#f87171" }}>*</span></label>
+            <LocalInput type="text" placeholder="Announcement title" value={announcementForm.title}
+              onCommit={v => setAnnouncementForm(p => ({ ...p, title: v }))}
+              className="" style={inp} />
+          </div>
+          <div>
+            <label style={lbl}>Body <span style={{ color: "#f87171" }}>*</span></label>
+            <textarea rows={5} placeholder="Write your announcement..." value={announcementForm.body}
+              onChange={e => setAnnouncementForm(p => ({ ...p, body: e.target.value }))}
+              style={{ ...inp, resize: "none" }} />
+          </div>
+          <div>
+            <label style={lbl}>Expires (optional)</label>
+            <DatePicker value={announcementForm.expiresAt} onChange={v => setAnnouncementForm(p => ({ ...p, expiresAt: v }))} placeholder="Select expiry date" align="left" fullWidth />
+          </div>
+          <div style={{ display: "flex", gap: 10, paddingTop: 6 }}>
+            <button onClick={closePanel}
+              style={{ flex: 1, padding: "11px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, color: "var(--text-ghost)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Cancel</button>
+            <button
+              onClick={async () => {
+                if (!announcementForm.title || !announcementForm.body) return;
+                const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+                const row = { masjid_id: masjidId, title: announcementForm.title, body: announcementForm.body, expires_at: announcementForm.expiresAt || null };
+                if (editingAnnouncement) {
+                  const { error } = await supabaseAdmin.from("announcements").update(row).eq("id", editingAnnouncement.id);
+                  if (error) { alert("Failed to save: " + error.message); return; }
+                  setAnnouncements(prev => prev.map(a => a.id === editingAnnouncement.id ? { ...a, ...announcementForm } : a));
+                } else {
+                  const { data, error } = await supabaseAdmin.from("announcements").insert(row).select().single();
+                  if (error) { alert("Failed to post: " + error.message); return; }
+                  setAnnouncements(prev => [...prev, { id: data.id, title: data.title, body: data.body || "", createdAt: data.created_at || today, expiresAt: data.expires_at || "" }]);
+                }
+                closePanel();
+              }}
+              style={{ flex: 1, padding: "11px", background: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 2, color: "var(--accent-text)", fontFamily: "Manrope, sans-serif", fontWeight: 700, fontSize: 13, cursor: "pointer" }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "var(--accent-light)"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "var(--accent)"; }}>
+              {editingAnnouncement ? "Save Changes" : "Post Announcement"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div style={{ display: "flex", minHeight: `calc(100vh - ${navH}px)`, fontFamily: "Manrope, sans-serif" }}>
+
+      {/* Mobile full-screen overlay */}
+      {isMobile && (
+        <>
+          {/* Backdrop */}
+          {eventsPanel && (
+            <div onClick={closePanel} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 40 }} />
+          )}
+          {/* Slide-up sheet */}
+          <div style={{
+            position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 50,
+            background: "var(--surface)",
+            borderRadius: "16px 16px 0 0",
+            border: "1px solid var(--outline-variant)",
+            maxHeight: "90dvh",
+            overflowY: "auto",
+            transform: eventsPanel ? "translateY(0)" : "translateY(100%)",
+            transition: "transform 0.3s cubic-bezier(0.4,0,0.2,1)",
+          }}>
+            {/* Drag handle */}
+            <div style={{ display: "flex", justifyContent: "center", padding: "12px 0 0" }}>
+              <div style={{ width: 36, height: 4, background: "var(--outline-variant)", borderRadius: 2 }} />
+            </div>
+            {formPanel}
+          </div>
+        </>
+      )}
+
+      {/* Left panel — list */}
+      <div style={{ flex: 1, overflowY: "auto", maxHeight: `calc(100vh - ${navH}px)`, borderRight: (!isMobile && eventsPanel) ? "1px solid var(--surface-mid)" : "1px solid transparent", transition: "border-color 0.3s" }}>
+        <div style={{ padding: isMobile ? "20px 16px 80px" : "28px 28px" }}>
 
           {/* Header */}
-          <div className="flex items-center justify-between mb-7">
+          <div style={{ display: "flex", alignItems: isMobile ? "center" : "flex-start", justifyContent: "space-between", marginBottom: 24, gap: 12 }}>
             <div>
-              <div className={`text-xs font-bold uppercase tracking-widest mb-1.5 ${theme.label}`}>Management</div>
-              <h1 className="text-3xl font-black">Events & Announcements</h1>
+              {!isMobile && <div style={{ fontSize: 10, fontWeight: 600, color: "var(--outline)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Management</div>}
+              <h1 style={{ fontSize: isMobile ? 17 : 20, fontWeight: 800, color: "var(--on-surface)", margin: 0, letterSpacing: "-0.02em" }}>Events & Announcements</h1>
             </div>
-            <button
-              onClick={eventsSubTab === "events" ? openNewEvent : openNewAnnouncement}
-              className={`px-5 py-2.5 ${theme.btn} rounded-xl font-black text-sm hover:scale-105 transition-all`}
-            >
-              + {eventsSubTab === "events" ? "New Event" : "New Announcement"}
+            <button onClick={eventsSubTab === "events" ? openNewEvent : openNewAnnouncement}
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: isMobile ? "8px 12px" : "9px 16px", background: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 2, color: "var(--accent-text)", fontFamily: "Manrope, sans-serif", fontWeight: 700, fontSize: isMobile ? 12 : 13, cursor: "pointer", transition: "background 0.12s", flexShrink: 0 }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "var(--accent-light)"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "var(--accent)"; }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 15 }}>add</span>
+              {eventsSubTab === "events" ? "New Event" : "New Announcement"}
             </button>
           </div>
 
           {/* Sub-tabs */}
-          <div className="flex items-center gap-1 bg-zinc-900/60 border border-white/5 rounded-xl p-1 w-fit mb-7">
+          <div style={{ display: "flex", gap: 0, background: "var(--surface)", border: "1px solid var(--surface-mid)", borderRadius: 2, padding: 3, width: "fit-content", marginBottom: 22 }}>
             {([
-              { k: "events" as const,        label: "Events",        icon: "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" },
-              { k: "announcements" as const, label: "Announcements", icon: "M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" },
+              { k: "events" as const, label: "Events", icon: "calendar_month" },
+              { k: "announcements" as const, label: "Announcements", icon: "campaign" },
             ]).map(t => (
-              <button
-                key={t.k}
+              <button key={t.k}
                 onClick={() => { setEventsSubTab(t.k); setEventsPanel(false); setEditingEvent(null); setEditingAnnouncement(null); }}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-black transition-all ${eventsSubTab === t.k ? `${theme.accentBg} ${theme.accent}` : "text-zinc-500 hover:text-white"}`}
-              >
-                <Icon d={t.icon} className="w-4 h-4" />
+                style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 14px", borderRadius: 2, border: "1px solid transparent", background: eventsSubTab === t.k ? "var(--surface-high)" : "transparent", borderColor: eventsSubTab === t.k ? "var(--outline-variant)" : "transparent", color: eventsSubTab === t.k ? "var(--on-surface)" : "var(--text-phantom)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer", transition: "all 0.12s" }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 15 }}>{t.icon}</span>
                 {t.label}
                 {t.k === "announcements" && announcements.length > 0 && (
-                  <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full ${eventsSubTab === t.k ? "bg-black/20" : "bg-zinc-700 text-zinc-300"}`}>
-                    {announcements.length}
-                  </span>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-phantom)", padding: "1px 6px", background: "var(--surface-mid)", borderRadius: 2 }}>{announcements.length}</span>
                 )}
               </button>
             ))}
           </div>
 
-          {/* ── Events list ── */}
+          {/* Events grid */}
           {eventsSubTab === "events" && (
             <div>
               {eventsLoading ? (
-                <div className="text-center py-20 text-zinc-600">
-                  <svg className="animate-spin w-8 h-8 mx-auto mb-3" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-                  </svg>
-                  <p className="text-sm font-bold">Loading events...</p>
+                <div style={{ textAlign: "center", padding: "60px 0", color: "var(--outline)" }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 32, display: "block", marginBottom: 8, animation: "spin 1s linear infinite" }}>progress_activity</span>
+                  <p style={{ fontSize: 13, margin: 0 }}>Loading events...</p>
                 </div>
               ) : events.length === 0 ? (
-                <div className="text-center py-20 text-zinc-700">
-                  <Icon d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" className="w-12 h-12 mx-auto mb-3" />
-                  <p className="font-black">No events</p>
+                <div style={{ textAlign: "center", padding: "60px 0", color: "var(--outline-variant)" }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 40, display: "block", marginBottom: 10 }}>calendar_month</span>
+                  <p style={{ fontWeight: 600, margin: 0, fontSize: 14 }}>No events yet</p>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
                   {events.slice().sort((a, b) => a.date.localeCompare(b.date)).map(ev => {
                     const [yyyy, mm, dd] = ev.date.split("-");
                     const isToday = ev.date === today;
                     const isPast = ev.date < today;
                     const isEditing = editingEvent?.id === ev.id && eventsPanel;
                     return (
-                      <div
-                        key={ev.id}
-                        className={`bg-zinc-900/60 border rounded-2xl p-4 flex items-center gap-4 transition-all ${
-                          isEditing ? `${theme.accentBorder} ${theme.accentBg}` : isToday ? `${theme.accentBorder}` : "border-white/5 hover:border-white/10"
-                        }`}
-                      >
-                        <div className={`w-12 shrink-0 rounded-xl flex flex-col items-center justify-center py-2 ${isPast ? "bg-zinc-800/60" : isToday ? "bg-black/20" : theme.iconBg}`}>
-                          <div className={`text-[9px] font-black uppercase tracking-widest ${isPast ? "text-zinc-600" : theme.iconColor}`}>{MONTHS[parseInt(mm) - 1]}</div>
-                          <div className={`text-xl font-black leading-none mt-0.5 ${isPast ? "text-zinc-500" : "text-white"}`}>{dd}</div>
-                          <div className={`text-[9px] font-bold ${isPast ? "text-zinc-600" : "text-zinc-400"}`}>{yyyy}</div>
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-0.5">
-                            <h3 className={`font-black text-sm ${isPast ? "text-zinc-400" : "text-white"}`}>{ev.title}</h3>
-                            {isToday && (
-                              <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full ${theme.accentBg} ${theme.accent} border ${theme.accentBorder}`}>Today</span>
-                            )}
+                      <div key={ev.id}
+                        style={{ display: "flex", flexDirection: "column", padding: "20px", background: isEditing ? "var(--surface-low)" : "var(--surface)", border: `1px solid ${isEditing ? "var(--outline-variant)" : "var(--surface-mid)"}`, borderRadius: 2, transition: "border-color 0.12s", gap: 14 }}
+                        onMouseEnter={e => { if (!isEditing) (e.currentTarget as HTMLElement).style.borderColor = "var(--outline-variant)"; }}
+                        onMouseLeave={e => { if (!isEditing) (e.currentTarget as HTMLElement).style.borderColor = "var(--surface-mid)"; }}>
+                        {/* Card top: date + today badge */}
+                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+                          <div style={{ width: 52, height: 56, background: isPast ? "var(--bg)" : "var(--surface-mid)", border: `1px solid ${isPast ? "var(--surface-mid)" : "var(--surface-highest)"}`, borderRadius: 2, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                            <div style={{ fontSize: 9, fontWeight: 700, color: isPast ? "var(--outline-variant)" : "var(--text-ghost)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{MONTHS[parseInt(mm)-1]}</div>
+                            <div style={{ fontSize: 22, fontWeight: 800, color: isPast ? "var(--outline)" : "var(--on-surface)", lineHeight: 1.1 }}>{dd}</div>
+                            <div style={{ fontSize: 9, color: "var(--outline-variant)", fontWeight: 500 }}>{yyyy}</div>
                           </div>
-                          <p className="text-zinc-500 text-xs truncate">{ev.description}</p>
-                          <span className="text-zinc-600 text-xs font-bold">{to12h(ev.time)}{ev.endTime ? ` – ${to12h(ev.endTime)}` : ""}</span>
+                          {isToday && <span style={{ fontSize: 9, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em", padding: "3px 8px", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2 }}>Today</span>}
                         </div>
-                        <div className="flex gap-1.5 shrink-0">
-                          <button
-                            onClick={() => handleEditEvent(ev)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
-                              isEditing ? `${theme.accentBg} ${theme.accentBorder} ${theme.accent}` : "border-white/8 text-zinc-400 hover:bg-white/5 hover:text-white"
-                            }`}
-                          >Edit</button>
-                          <button
-                            onClick={() => handleDeleteEvent(ev.id)}
-                            className="px-3 py-1.5 rounded-lg text-xs font-bold bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-all"
-                          >Delete</button>
+                        {/* Card body */}
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: 700, fontSize: 14, color: isPast ? "var(--text-phantom)" : "var(--on-surface)", marginBottom: 6, lineHeight: 1.3 }}>{ev.title}</div>
+                          {ev.description && <div style={{ fontSize: 12, color: "var(--outline)", lineHeight: 1.55, marginBottom: 8, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{ev.description}</div>}
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <span className="material-symbols-outlined" style={{ fontSize: 13, color: "var(--outline)" }}>schedule</span>
+                            <span style={{ fontSize: 12, color: "var(--text-phantom)", fontWeight: 500 }}>{to12h(ev.time)}{ev.endTime ? ` – ${to12h(ev.endTime)}` : ""}</span>
+                          </div>
+                        </div>
+                        {/* Card actions */}
+                        <div style={{ display: "flex", gap: 6, borderTop: "1px solid var(--surface-mid)", paddingTop: 14 }}>
+                          <button onClick={() => handleEditEvent(ev)}
+                            style={{ flex: 1, padding: "7px 0", background: isEditing ? "var(--surface-high)" : "var(--surface-low)", border: `1px solid ${isEditing ? "var(--outline-variant)" : "var(--surface-high)"}`, borderRadius: 2, color: "var(--on-surface-variant)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>Edit</button>
+                          <button onClick={() => handleDeleteEvent(ev.id)}
+                            style={{ flex: 1, padding: "7px 0", background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 2, color: "#f87171", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>Delete</button>
                         </div>
                       </div>
                     );
@@ -192,195 +310,74 @@ const EventsTab: React.FC<EventsTabProps> = ({
             </div>
           )}
 
-          {/* ── Announcements list ── */}
+          {/* Announcements grid */}
           {eventsSubTab === "announcements" && (
-            <div className="space-y-3">
+            <div>
               {announcements.length === 0 ? (
-                <div className="text-center py-20 text-zinc-700">
-                  <Icon d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" className="w-12 h-12 mx-auto mb-3" />
-                  <p className="font-black">No announcements yet</p>
+                <div style={{ textAlign: "center", padding: "60px 0", color: "var(--outline-variant)" }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 40, display: "block", marginBottom: 10 }}>campaign</span>
+                  <p style={{ fontWeight: 600, margin: 0, fontSize: 14 }}>No announcements yet</p>
                 </div>
-              ) : sortedAnnouncements.map(ann => {
-                const isEditing = editingAnnouncement?.id === ann.id && eventsPanel;
-                return (
-                  <div
-                    key={ann.id}
-                    className={`bg-zinc-900/60 border rounded-2xl p-5 transition-all ${isEditing ? `${theme.accentBorder} ${theme.accentBg}` : "border-white/5 hover:border-white/10"}`}
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="flex-1 min-w-0">
-                        <h3 className="font-black text-white text-sm mb-1">{ann.title}</h3>
-                        <p className="text-zinc-400 text-xs leading-relaxed line-clamp-2 mb-3">{ann.body}</p>
-                        <div className="flex items-center gap-3">
-                          {ann.createdAt && (
-                            <span className="flex items-center gap-1 text-[10px] font-bold text-zinc-500">
-                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
-                              </svg>
-                              Posted {new Date(ann.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                            </span>
-                          )}
-                          {ann.expiresAt && (
-                            <span className={`flex items-center gap-1 text-[10px] font-bold ${new Date(ann.expiresAt) < new Date() ? "text-red-400" : "text-zinc-500"}`}>
-                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                              </svg>
-                              Expires {new Date(ann.expiresAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                            </span>
-                          )}
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+                  {sortedAnnouncements.map(ann => {
+                    const isEditing = editingAnnouncement?.id === ann.id && eventsPanel;
+                    const isExpired = ann.expiresAt ? new Date(ann.expiresAt) < new Date() : false;
+                    return (
+                      <div key={ann.id}
+                        style={{ display: "flex", flexDirection: "column", padding: "20px", background: isEditing ? "var(--surface-low)" : "var(--surface)", border: `1px solid ${isEditing ? "var(--outline-variant)" : "var(--surface-mid)"}`, borderRadius: 2, transition: "border-color 0.12s", gap: 14 }}
+                        onMouseEnter={e => { if (!isEditing) (e.currentTarget as HTMLElement).style.borderColor = "var(--outline-variant)"; }}
+                        onMouseLeave={e => { if (!isEditing) (e.currentTarget as HTMLElement).style.borderColor = "var(--surface-mid)"; }}>
+                        {/* Card top: icon + expired badge */}
+                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+                          <div style={{ width: 36, height: 36, background: "var(--accent-bg)", border: "1px solid var(--accent-bg)", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <span className="material-symbols-outlined" style={{ fontSize: 18, color: "var(--accent)" }}>campaign</span>
+                          </div>
+                          {isExpired && <span style={{ fontSize: 9, fontWeight: 700, color: "#f87171", textTransform: "uppercase", letterSpacing: "0.06em", padding: "3px 8px", background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 2 }}>Expired</span>}
+                        </div>
+                        {/* Card body */}
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: 700, fontSize: 14, color: "var(--on-surface)", marginBottom: 8, lineHeight: 1.3 }}>{ann.title}</div>
+                          <div style={{ fontSize: 12, color: "var(--text-phantom)", lineHeight: 1.6, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{ann.body}</div>
+                        </div>
+                        {/* Card meta */}
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          {ann.createdAt && <span style={{ fontSize: 11, color: "var(--outline-variant)", fontWeight: 500 }}>Posted {new Date(ann.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>}
+                          {ann.expiresAt && <span style={{ fontSize: 11, fontWeight: 500, color: isExpired ? "#f87171" : "var(--outline-variant)" }}>Expires {new Date(ann.expiresAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>}
+                        </div>
+                        {/* Card actions */}
+                        <div style={{ display: "flex", gap: 6, borderTop: "1px solid var(--surface-mid)", paddingTop: 14 }}>
+                          <button
+                            onClick={() => { setEditingAnnouncement(ann); setAnnouncementForm({ title: ann.title, body: ann.body, expiresAt: ann.expiresAt }); setEventsPanel(true); }}
+                            style={{ flex: 1, padding: "7px 0", background: isEditing ? "var(--surface-high)" : "var(--surface-low)", border: `1px solid ${isEditing ? "var(--outline-variant)" : "var(--surface-high)"}`, borderRadius: 2, color: "var(--on-surface-variant)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>Edit</button>
+                          <button
+                            onClick={async () => {
+                              if (!confirm("Delete this announcement?")) return;
+                              const { error } = await supabaseAdmin.from("announcements").delete().eq("id", ann.id);
+                              if (error) { alert("Failed to delete: " + error.message); return; }
+                              setAnnouncements(prev => prev.filter(a => a.id !== ann.id));
+                            }}
+                            style={{ flex: 1, padding: "7px 0", background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 2, color: "#f87171", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>Delete</button>
                         </div>
                       </div>
-                      <div className="flex gap-1.5 shrink-0">
-                        <button
-                          onClick={() => { setEditingAnnouncement(ann); setAnnouncementForm({ title: ann.title, body: ann.body, expiresAt: ann.expiresAt }); setEventsPanel(true); }}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
-                            isEditing ? `${theme.accentBg} ${theme.accentBorder} ${theme.accent}` : "border-white/8 text-zinc-400 hover:bg-white/5 hover:text-white"
-                          }`}
-                        >Edit</button>
-                        <button
-                          onClick={async () => {
-                            if (!confirm("Delete this announcement?")) return;
-                            const { error } = await supabaseAdmin.from("announcements").delete().eq("id", ann.id);
-                            if (error) { alert("Failed to delete: " + error.message); return; }
-                            setAnnouncements(prev => prev.filter(a => a.id !== ann.id));
-                          }}
-                          className="px-3 py-1.5 rounded-lg text-xs font-bold bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-all"
-                        >Delete</button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
-
         </div>
       </div>
 
-      {/* ── Right: Form panel ── */}
-      <div
-        style={{
-          width: eventsPanel ? "50%" : "0",
-          maxHeight: "calc(100vh - 73px)",
-          overflow: eventsPanel ? "auto" : "hidden",
-          transition: "width 0.35s cubic-bezier(0.4,0,0.2,1)",
-          flexShrink: 0,
-        }}
-      >
-        <div
-          style={{
-            opacity: eventsPanel ? 1 : 0,
-            transform: eventsPanel ? "translateX(0)" : "translateX(24px)",
-            transition: "opacity 0.25s ease 0.1s, transform 0.25s ease 0.1s",
-            minWidth: "400px",
-          }}
-        >
-          <div className="px-8 py-8">
-            {/* Panel header */}
-            <div className="flex items-center justify-between mb-8">
-              <div>
-                <div className={`text-xs font-bold uppercase tracking-widest mb-1.5 ${theme.label}`}>
-                  {eventsSubTab === "events" ? "Event" : "Announcement"}
-                </div>
-                <h2 className="text-2xl font-black">
-                  {eventsSubTab === "events"
-                    ? (editingEvent ? "Edit Event" : "New Event")
-                    : (editingAnnouncement ? "Edit Announcement" : "New Announcement")}
-                </h2>
-              </div>
-              <button
-                onClick={closePanel}
-                className="w-9 h-9 flex items-center justify-center rounded-xl bg-zinc-800/60 border border-white/8 text-zinc-400 hover:text-white hover:bg-white/5 transition-all"
-              >
-                <Icon d="M6 18L18 6M6 6l12 12" className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* ── Event form ── */}
-            {eventsSubTab === "events" && (
-              <div className="space-y-5">
-                <div>
-                  <label className={labelCls}>Title <span className="text-red-400">*</span></label>
-                  <LocalInput type="text" placeholder="e.g. Friday Khutbah" value={eventForm.title}
-                    onCommit={v => setEventForm(p => ({ ...p, title: v }))} className={inputCls} />
-                </div>
-                <div>
-                  <label className={labelCls}>Description</label>
-                  <textarea rows={4} placeholder="Describe the event..." value={eventForm.description}
-                    onChange={e => setEventForm(p => ({ ...p, description: e.target.value }))}
-                    className={inputCls + " resize-none"} />
-                </div>
-                <div>
-                  <label className={labelCls}>Date <span className="text-red-400">*</span></label>
-                  <DatePicker value={eventForm.date} onChange={v => setEventForm(p => ({ ...p, date: v }))} placeholder="Select date" align="left" fullWidth />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className={labelCls}>Start Time <span className="text-red-400">*</span></label>
-                    <LocalInput type="text" placeholder="e.g. 1:30 PM" value={eventForm.time}
-                      onCommit={v => setEventForm(p => ({ ...p, time: formatTimeInput(v) || v }))} className={inputCls} />
-                  </div>
-                  <div>
-                    <label className={labelCls}>End Time <span className="text-zinc-600">(optional)</span></label>
-                    <LocalInput type="text" placeholder="e.g. 3:00 PM" value={eventForm.endTime}
-                      onCommit={v => setEventForm(p => ({ ...p, endTime: formatTimeInput(v) || v }))} className={inputCls} />
-                  </div>
-                </div>
-                <div className="flex gap-3 pt-2">
-                  <button onClick={closePanel} className="flex-1 py-3 rounded-xl font-bold border border-white/10 text-zinc-400 hover:bg-white/5 transition-all">Cancel</button>
-                  <button onClick={handleEventSubmit} className={`flex-1 py-3 ${theme.btn} rounded-xl font-black transition-all hover:scale-[1.02]`}>
-                    {editingEvent ? "Save Changes" : "Create Event"}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* ── Announcement form ── */}
-            {eventsSubTab === "announcements" && (
-              <div className="space-y-5">
-                <div>
-                  <label className={labelCls}>Title <span className="text-red-400">*</span></label>
-                  <LocalInput type="text" placeholder="Announcement title" value={announcementForm.title}
-                    onCommit={v => setAnnouncementForm(p => ({ ...p, title: v }))} className={inputCls} />
-                </div>
-                <div>
-                  <label className={labelCls}>Body <span className="text-red-400">*</span></label>
-                  <textarea rows={5} placeholder="Write your announcement..." value={announcementForm.body}
-                    onChange={e => setAnnouncementForm(p => ({ ...p, body: e.target.value }))}
-                    className={inputCls + " resize-none"} />
-                </div>
-                <div>
-                  <label className={labelCls}>Expires (optional)</label>
-                  <DatePicker value={announcementForm.expiresAt} onChange={v => setAnnouncementForm(p => ({ ...p, expiresAt: v }))} placeholder="Select expiry date" align="left" fullWidth />
-                </div>
-                <div className="flex gap-3 pt-2">
-                  <button onClick={closePanel} className="flex-1 py-3 rounded-xl font-bold border border-white/10 text-zinc-400 hover:bg-white/5 transition-all">Cancel</button>
-                  <button
-                    onClick={async () => {
-                      if (!announcementForm.title || !announcementForm.body) return;
-                      const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
-                      const row = { masjid_id: masjidId, title: announcementForm.title, body: announcementForm.body, expires_at: announcementForm.expiresAt || null };
-                      if (editingAnnouncement) {
-                        const { error } = await supabaseAdmin.from("announcements").update(row).eq("id", editingAnnouncement.id);
-                        if (error) { alert("Failed to save: " + error.message); return; }
-                        setAnnouncements(prev => prev.map(a => a.id === editingAnnouncement.id ? { ...a, ...announcementForm } : a));
-                      } else {
-                        const { data, error } = await supabaseAdmin.from("announcements").insert(row).select().single();
-                        if (error) { alert("Failed to post: " + error.message); return; }
-                        setAnnouncements(prev => [...prev, { id: data.id, title: data.title, body: data.body || "", createdAt: data.created_at || today, expiresAt: data.expires_at || "" }]);
-                      }
-                      closePanel();
-                    }}
-                    className={`flex-1 py-3 ${theme.btn} rounded-xl font-black transition-all hover:scale-[1.02]`}
-                  >
-                    {editingAnnouncement ? "Save Changes" : "Post Announcement"}
-                  </button>
-                </div>
-              </div>
-            )}
+      {/* Desktop right form panel */}
+      {!isMobile && (
+        <div style={{ width: eventsPanel ? "42%" : 0, maxHeight: `calc(100vh - ${navH}px)`, overflow: eventsPanel ? "auto" : "hidden", transition: "width 0.3s cubic-bezier(0.4,0,0.2,1)", flexShrink: 0 }}>
+          <div style={{ opacity: eventsPanel ? 1 : 0, transform: eventsPanel ? "translateX(0)" : "translateX(20px)", transition: "opacity 0.2s ease 0.08s, transform 0.2s ease 0.08s", minWidth: 360 }}>
+            {formPanel}
           </div>
         </div>
-      </div>
+      )}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 };

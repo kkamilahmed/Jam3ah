@@ -1,8 +1,9 @@
 import React from "react";
 
-const DatePicker: React.FC<{ value: string; onChange: (v: string) => void; placeholder?: string; align?: "left" | "right"; fullWidth?: boolean }> =
-  ({ value, onChange, placeholder = "Pick a date", align = "left", fullWidth = false }) => {
+const DatePicker: React.FC<{ value: string; onChange: (v: string) => void; placeholder?: string; align?: "left" | "right"; fullWidth?: boolean; rangeStart?: string }> =
+  ({ value, onChange, placeholder = "Pick a date", align = "left", fullWidth = false, rangeStart }) => {
   const [open, setOpen] = React.useState(false);
+  const [hovered, setHovered] = React.useState<string | null>(null);
   const parsed = value ? new Date(value + "T00:00:00") : null;
   const [viewYear, setViewYear] = React.useState(() => parsed ? parsed.getFullYear() : new Date().getFullYear());
   const [viewMonth, setViewMonth] = React.useState(() => parsed ? parsed.getMonth() : new Date().getMonth());
@@ -18,43 +19,66 @@ const DatePicker: React.FC<{ value: string; onChange: (v: string) => void; place
   const dayStr = (d: number) => `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   const today = new Date().toISOString().slice(0, 10);
   const label = parsed ? parsed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : placeholder;
+
+  const btnStyle: React.CSSProperties = {
+    display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+    background: "var(--surface-low)", border: "1px solid var(--outline-variant)", borderRadius: 2,
+    color: value ? "var(--on-surface)" : "var(--text-phantom)", fontFamily: "Manrope, sans-serif",
+    fontSize: 13, fontWeight: 500, cursor: "pointer", outline: "none",
+    width: fullWidth ? "100%" : "auto", transition: "border-color 0.15s", textAlign: "left",
+  };
+
   return (
-    <div className="relative">
-      <button onClick={() => setOpen(o => !o)}
-        className={`flex items-center gap-2 bg-black/40 border-2 border-white/10 rounded-xl px-4 py-3 text-sm font-medium hover:border-white/20 transition-colors focus:outline-none ${fullWidth ? "w-full" : ""}`}>
-        <svg className="w-3.5 h-3.5 text-zinc-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <rect x="3" y="4" width="18" height="18" rx="2" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M16 2v4M8 2v4M3 10h18" strokeLinecap="round" />
-        </svg>
-        <span className={value ? "text-white" : "text-zinc-500"}>{label}</span>
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen(o => !o)} style={btnStyle}
+        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--outline)"; }}
+        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--outline-variant)"; }}>
+        <span className="material-symbols-outlined" style={{ fontSize: 16, color: "var(--text-phantom)", flexShrink: 0 }}>calendar_month</span>
+        <span>{label}</span>
       </button>
       {open && (
         <>
-          <div className="fixed inset-0 z-[80]" onClick={() => setOpen(false)} />
-          <div className={`absolute top-full mt-2 z-[81] bg-zinc-900 border border-white/10 rounded-2xl p-4 shadow-2xl w-60 ${align === "right" ? "right-0" : "left-0"}`}>
-            <div className="flex items-center justify-between mb-3">
-              <button onClick={prevMonth} className="w-7 h-7 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-white transition-colors text-xs font-black">‹</button>
-              <span className="text-sm font-black text-white">{new Date(viewYear, viewMonth).toLocaleDateString("en-US", { month: "long", year: "numeric" })}</span>
-              <button onClick={nextMonth} className="w-7 h-7 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-white transition-colors text-xs font-black">›</button>
+          <div style={{ position: "fixed", inset: 0, zIndex: 80 }} onClick={() => setOpen(false)} />
+          <div style={{
+            position: "absolute", top: "calc(100% + 6px)", zIndex: 81,
+            background: "var(--surface)", border: "1px solid var(--outline-variant)", borderRadius: 2,
+            padding: 16, boxShadow: "0 8px 32px rgba(0,0,0,0.8)", width: 240,
+            ...(align === "right" ? { right: 0 } : { left: 0 }),
+          }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <button onClick={prevMonth} style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--surface-mid)", border: "1px solid var(--outline-variant)", borderRadius: 2, color: "var(--text-ghost)", cursor: "pointer", fontSize: 14, fontWeight: 700 }}>‹</button>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--on-surface)", fontFamily: "Manrope, sans-serif" }}>
+                {new Date(viewYear, viewMonth).toLocaleDateString("en-US", { month: "long", year: "numeric" })}
+              </span>
+              <button onClick={nextMonth} style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--surface-mid)", border: "1px solid var(--outline-variant)", borderRadius: 2, color: "var(--text-ghost)", cursor: "pointer", fontSize: 14, fontWeight: 700 }}>›</button>
             </div>
-            <div className="grid grid-cols-7 mb-1">
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", marginBottom: 4 }}>
               {["Su","Mo","Tu","We","Th","Fr","Sa"].map(d => (
-                <div key={d} className="text-center text-[10px] font-black text-zinc-600 py-0.5">{d}</div>
+                <div key={d} style={{ textAlign: "center", fontSize: 10, fontWeight: 700, color: "var(--outline-variant)", padding: "2px 0", fontFamily: "Manrope, sans-serif" }}>{d}</div>
               ))}
             </div>
-            <div className="grid grid-cols-7 gap-0.5">
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2 }}>
               {cells.map((day, idx) => {
                 const ds = day ? dayStr(day) : "";
                 const sel = ds === value;
                 const tod = ds === today;
+                const rangeEnd = hovered || value;
+                const inRange = !!(rangeStart && rangeEnd && ds && ds > rangeStart && ds < rangeEnd);
+                const isRangeStart = !!(rangeStart && ds === rangeStart);
                 return (
                   <button key={idx} disabled={!day} onClick={() => { if (day) { onChange(ds); setOpen(false); } }}
-                    className={`h-8 w-full rounded-lg text-xs font-bold transition-all ${
-                      !day ? "invisible" :
-                      sel ? "bg-emerald-500 text-white font-black shadow-lg shadow-emerald-500/20" :
-                      tod ? "border border-emerald-500/40 text-emerald-400 font-black hover:bg-emerald-500/10" :
-                      "text-zinc-400 hover:bg-zinc-800 hover:text-white"
-                    }`}>{day}</button>
+                    onMouseEnter={() => { if (day) setHovered(ds); }}
+                    onMouseLeave={() => setHovered(null)}
+                    style={{
+                      height: 30, border: "1px solid transparent", borderRadius: 2, fontSize: 12,
+                      fontWeight: sel || isRangeStart ? 700 : 500, fontFamily: "Manrope, sans-serif", cursor: day ? "pointer" : "default",
+                      visibility: day ? "visible" : "hidden",
+                      background: sel ? "var(--accent)" : isRangeStart ? "var(--accent-bg)" : inRange ? "var(--accent-bg)" : tod ? "var(--surface-highest)" : hovered === ds ? "var(--surface-high)" : "transparent",
+                      color: sel ? "var(--accent-text)" : inRange || isRangeStart ? "var(--accent)" : tod ? "var(--text-max)" : "var(--text-ghost)",
+                      borderColor: inRange || isRangeStart ? "var(--accent-border)" : tod && !sel ? "var(--outline)" : "transparent",
+                      transition: "all 0.1s",
+                    }}
+                  >{day}</button>
                 );
               })}
             </div>

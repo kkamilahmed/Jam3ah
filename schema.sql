@@ -1,5 +1,5 @@
 -- ============================================================
--- Jam3ah — Supabase Schema
+-- Jam3ah — Supabase Schema (live as of 2026-04-26)
 -- Run this in: Supabase Dashboard → SQL Editor → New Query
 -- ============================================================
 
@@ -23,6 +23,10 @@ create table if not exists masjids (
   user_id             uuid references auth.users(id),
   masjid_name         text not null,
   address             text,
+  city                text,
+  province            text,
+  postal_code         text,
+  country             text default 'Canada',
   masjid_phone        text,
   masjid_email        text not null unique,
   incharge_name       text,
@@ -43,83 +47,68 @@ create table if not exists masjids (
 
 -- 3. Prayer settings per masjid
 create table if not exists prayer_settings (
-  id              uuid default gen_random_uuid() primary key,
-  masjid_id       uuid references masjids(id) unique,
-  source          text default 'backend' check (source in ('backend', 'excel')),
-  city            text default 'Toronto',
-  country         text default 'Canada',
-  latitude        text default '43.651070',
-  longitude       text default '-79.347015',
-  elevation       text default '76',
-  timezone        text default 'America/Toronto',
-  method          text default 'ISNA',
-  asr_method      text default 'Standard',
-  higher_lat_rule text default 'AngleBased',
-  midnight_mode   text default 'Standard',
-  fajr_adjust     int  default 0,
-  dhuhr_adjust    int  default 0,
-  asr_adjust      int  default 0,
-  maghrib_adjust  int  default 0,
-  isha_adjust     int  default 0,
-  prayer_config   jsonb,  -- { fajr: { adhanMode, adhanOffset, adhanFixed, iqamaMode, iqamaOffset, iqamaFixed }, ... }
-  extra_timings   jsonb,  -- { fajr: [], maghrib: [], jummah: ["1:15 PM"] }
-  times_source    text default 'backend',  -- 'backend' | 'excel'
-  created_at      timestamptz default now()
+  id                     uuid default gen_random_uuid() primary key,
+  masjid_id              uuid references masjids(id) unique,
+  source                 text default 'backend' check (source in ('backend', 'excel')),
+  latitude               text default '43.651070',
+  longitude              text default '-79.347015',
+  elevation              text default '76',
+  timezone               text default 'America/Toronto',
+  method                 text default 'NorthAmerica',
+  madhab                 text default 'Standard',
+  higher_lat_rule        text default 'AngleBased',
+  polar_circle_resolution text default 'AqrabBalad',
+  shafaq                 text default 'General',
+  rounding               text default 'Nearest',
+  midnight_mode          text default 'Standard',
+  adjust_fajr            int  default 0,
+  adjust_sunrise         int  default 0,
+  adjust_dhuhr           int  default 0,
+  adjust_asr             int  default 0,
+  adjust_maghrib         int  default 0,
+  adjust_isha            int  default 0,
+  fajr_angle             text,
+  isha_angle             text,
+  isha_interval          text,
+  maghrib_angle          text,
+  presets                jsonb,  -- array of PrayerPreset objects
+  prayer_config          jsonb,  -- { fajr: { adhanMode, adhanOffset, ... }, ... }
+  jummah_config          jsonb,  -- { fajr: [], maghrib: [], jummah: [], jummahSlots: [], weekendIsha: {} }
+  created_at             timestamptz default now(),
+  updated_at             timestamptz default now()
 );
-
--- Migration for existing installations (run in Supabase SQL Editor):
--- alter table prayer_settings add column if not exists prayer_config jsonb;
--- alter table prayer_settings add column if not exists extra_timings jsonb;
--- alter table prayer_settings add column if not exists times_source text default 'backend';
 
 -- 4. Daily prayer times per masjid
 create table if not exists prayer_times (
-  id             uuid default gen_random_uuid() primary key,
-  masjid_id      uuid references masjids(id),
-  date           date not null,
-  fajr           text,
-  dhuhr          text,
-  asr            text,
-  maghrib        text,
-  isha           text,
-  fajr_adhan     text,
-  fajr_iqama     text,
-  dhuhr_adhan    text,
-  dhuhr_iqama    text,
-  asr_adhan      text,
-  asr_iqama      text,
-  maghrib_adhan  text,
-  maghrib_iqama  text,
+  id              uuid default gen_random_uuid() primary key,
+  masjid_id       uuid references masjids(id),
+  date            date not null,
+  fajr            text,
+  sunrise         text,
+  dhuhr           text,
+  asr             text,
+  maghrib         text,
+  isha            text,
+  fajr_adhan      text,
+  dhuhr_adhan     text,
+  asr_adhan       text,
+  maghrib_adhan   text,
   isha_adhan      text,
+  fajr_iqama      text,
+  dhuhr_iqama     text,
+  asr_iqama       text,
+  maghrib_iqama   text,
   isha_iqama      text,
-  fajr_iqama_2    text,   -- 2nd Fajr jamaat
-  fajr_iqama_3    text,   -- 3rd Fajr jamaat
-  maghrib_iqama_2 text,   -- 2nd Maghrib jamaat
-  maghrib_iqama_3 text,   -- 3rd Maghrib jamaat
-  jummah_1        text,   -- 1st Jummah khutbah (Fridays only)
-  jummah_2        text,   -- 2nd Jummah khutbah
-  jummah_3        text,   -- 3rd Jummah khutbah
+  fajr_iqama_2    text,
+  fajr_iqama_3    text,
+  maghrib_iqama_2 text,
+  maghrib_iqama_3 text,
+  jummah_1        text,
+  jummah_2        text,
+  jummah_3        text,
   unique(masjid_id, date)
 );
-
--- Migration for existing installations (run in Supabase SQL Editor):
--- alter table prayer_times add column if not exists fajr_adhan text;
--- alter table prayer_times add column if not exists fajr_iqama text;
--- alter table prayer_times add column if not exists dhuhr_adhan text;
--- alter table prayer_times add column if not exists dhuhr_iqama text;
--- alter table prayer_times add column if not exists asr_adhan text;
--- alter table prayer_times add column if not exists asr_iqama text;
--- alter table prayer_times add column if not exists maghrib_adhan text;
--- alter table prayer_times add column if not exists maghrib_iqama text;
--- alter table prayer_times add column if not exists isha_adhan text;
--- alter table prayer_times add column if not exists isha_iqama text;
--- alter table prayer_times add column if not exists fajr_iqama_2 text;
--- alter table prayer_times add column if not exists fajr_iqama_3 text;
--- alter table prayer_times add column if not exists maghrib_iqama_2 text;
--- alter table prayer_times add column if not exists maghrib_iqama_3 text;
--- alter table prayer_times add column if not exists jummah_1 text;
--- alter table prayer_times add column if not exists jummah_2 text;
--- alter table prayer_times add column if not exists jummah_3 text;
+create index if not exists idx_prayer_times_masjid_date on prayer_times(masjid_id, date);
 
 -- 5. Events per masjid
 create table if not exists events (
@@ -129,10 +118,22 @@ create table if not exists events (
   description text,
   date        date,
   time        text,
+  location    text,
   created_at  timestamptz default now()
 );
 
--- 6. Questions submitted to masjid
+-- 6. Announcements per masjid
+create table if not exists announcements (
+  id         uuid default gen_random_uuid() primary key,
+  masjid_id  uuid references masjids(id) on delete cascade,
+  title      text not null,
+  body       text,
+  pinned     boolean default false,
+  expires_at date,
+  created_at timestamptz default now()
+);
+
+-- 7. Questions submitted to masjid
 create table if not exists questions (
   id          uuid default gen_random_uuid() primary key,
   masjid_id   uuid references masjids(id),
@@ -150,6 +151,7 @@ alter table masjids              enable row level security;
 alter table prayer_settings      enable row level security;
 alter table prayer_times         enable row level security;
 alter table events               enable row level security;
+alter table announcements        enable row level security;
 alter table questions            enable row level security;
 
 -- Anyone (anon) can submit a registration
@@ -157,7 +159,7 @@ create policy "anon_insert_registrations"
   on masjid_registrations for insert
   with check (true);
 
--- Authenticated users can read their own masjid
+-- Authenticated users can read/update their own masjid
 create policy "owner_select_masjid"
   on masjids for select
   using (auth.uid() = user_id);
@@ -179,6 +181,11 @@ create policy "owner_all_prayer_times"
 -- Events: owner only
 create policy "owner_all_events"
   on events for all
+  using (masjid_id in (select id from masjids where user_id = auth.uid()));
+
+-- Announcements: owner only
+create policy "owner_all_announcements"
+  on announcements for all
   using (masjid_id in (select id from masjids where user_id = auth.uid()));
 
 -- Questions: anon can insert, owner can read/update

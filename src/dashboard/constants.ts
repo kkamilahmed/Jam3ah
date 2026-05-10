@@ -369,13 +369,13 @@ export function mergePresetWithLocation(
 }
 
 // ── Shared CSS class strings ──────────────────────────────────────────────
-export const inputClsBase = `w-full px-4 py-3 bg-zinc-900 border-2 border-white/10 rounded-xl text-white font-medium outline-none focus:outline-none focus:ring-0 hover:border-white/20 placeholder-zinc-600 transition-all [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`;
-export const selectClsBase = `w-full px-4 py-3 bg-zinc-900 border-2 border-white/10 rounded-xl text-white font-medium outline-none focus:outline-none focus:ring-0 hover:border-white/20 transition-all cursor-pointer appearance-none [&>option]:bg-zinc-900 [&>option]:text-white`;
-export const labelCls = `block text-xs text-zinc-500 font-black uppercase tracking-widest mb-2`;
+export const inputClsBase = `w-full px-3 py-2.5 bg-[#131313] border border-[#2a2a2a] rounded-sm text-[#c6c6c7] font-medium outline-none focus:outline-none focus:ring-0 focus:border-[#5a5a5a] placeholder-[#3a3a3a] transition-all text-sm [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`;
+export const selectClsBase = `w-full px-3 py-2.5 bg-[#131313] border border-[#2a2a2a] rounded-sm text-[#c6c6c7] font-medium outline-none focus:outline-none focus:ring-0 focus:border-[#5a5a5a] transition-all cursor-pointer appearance-none text-sm [&>option]:bg-[#131313] [&>option]:text-[#c6c6c7]`;
+export const labelCls = `block text-xs text-[#5a5a5a] font-semibold tracking-wide mb-1.5`;
 
-export function makeInputCls(inputFocus: string) {
-  return `${inputClsBase} ${inputFocus}`;
+export function makeInputCls(_inputFocus: string) {
+  return inputClsBase;
 }
-export function makeSelectCls(inputFocus: string) {
-  return `${selectClsBase} ${inputFocus}`;
+export function makeSelectCls(_inputFocus: string) {
+  return selectClsBase;
 }

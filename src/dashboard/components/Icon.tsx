@@ -1,9 +1,9 @@
 
-export const IslamicPattern = ({ color = "#34d399", opacity = 0.04 }: { color?: string; opacity?: number }) => (
+export const IslamicPattern = ({ color = "#3a3a3a", opacity = 0.6 }: { color?: string; opacity?: number }) => (
   <svg className="absolute inset-0 w-full h-full pointer-events-none" xmlns="http://www.w3.org/2000/svg" style={{ opacity }}>
     <defs>
       <pattern id="islamic-dash" x="0" y="0" width="80" height="80" patternUnits="userSpaceOnUse">
-        <g fill="none" stroke={color} strokeWidth="0.8">
+        <g fill="none" stroke={color} strokeWidth="0.5">
           <polygon points="40,4 52,16 52,36 40,48 28,36 28,16" />
           <polygon points="40,4 76,22 76,58 40,76 4,58 4,22" />
           <line x1="40" y1="4" x2="40" y2="76" />
@@ -26,4 +26,9 @@ export const Icon = ({ d, className = "w-5 h-5" }: { d: string; className?: stri
   <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={d} />
   </svg>
+);
+
+// Material Symbol icon component
+export const MS = ({ icon, className = "" }: { icon: string; className?: string }) => (
+  <span className={`material-symbols-outlined ${className}`}>{icon}</span>
 );

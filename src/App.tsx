@@ -8,11 +8,13 @@ import HomePage      from './pages/HomePage';
 import AdminPage     from './pages/AdminPage';
 import WelcomePage   from './pages/WelcomePage';
 import NotFoundPage  from './pages/NotFoundPage';
+import TvScreenPage  from './pages/TvScreenPage';
 
 function App() {
   return (
     <Router>
       <Routes>
+        <Route path="/home/tvscreen"   element={<TvScreenPage />} />
         <Route path="/home"            element={<Navigate to="/home/overview" replace />} />
         <Route path="/home/:tab"       element={<HomePage />} />
         <Route path="/dashboard"       element={<Navigate to="/home/overview" replace />} />

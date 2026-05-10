@@ -71,14 +71,14 @@ export function addMinsToTime(timeStr: string, mins: number): string {
   return `${dh}:${String(nm).padStart(2, "0")} ${np}`;
 }
 
-export function makeBatchCell(offset: number): BatchCell { return { mode: "offset", offset, fixed: "" }; }
+export function makeBatchCell(_offset?: number): BatchCell { return { mode: "fixed", offset: 0, fixed: "" }; }
 
 export function makeDefaultBatchAdhan(): BatchConfig {
-  return { fajr: makeBatchCell(0), dhuhr: makeBatchCell(0), asr: makeBatchCell(0), maghrib: makeBatchCell(0), isha: makeBatchCell(0) };
+  return { fajr: makeBatchCell(), dhuhr: makeBatchCell(), asr: makeBatchCell(), maghrib: makeBatchCell(), isha: makeBatchCell() };
 }
 
 export function makeDefaultBatchIqama(): BatchConfig {
-  return { fajr: makeBatchCell(30), dhuhr: makeBatchCell(30), asr: makeBatchCell(30), maghrib: makeBatchCell(3), isha: makeBatchCell(30) };
+  return { fajr: makeBatchCell(), dhuhr: makeBatchCell(), asr: makeBatchCell(), maghrib: makeBatchCell(), isha: makeBatchCell() };
 }
 
 export function applyBatchCell(cell: BatchCell, base: string): string {
