@@ -75,9 +75,9 @@ const OverviewTab: React.FC<OverviewTabProps> = ({
     : null;
 
   const statCards = [
-    { label: "Days of Prayer Times", sublabel: sourceLabel, value: daysCovered, icon: "schedule", warn: false, action: () => setActiveTab("prayer-times") },
-    { label: "Upcoming Events", sublabel: nextEventLabel ? `Next ${nextEventLabel}` : "None upcoming", value: upcomingEvents.length, icon: "calendar_month", warn: false, action: () => setActiveTab("events") },
-    { label: "Active Announcements", sublabel: activeAnnouncements.length ? "On your website" : "None live", value: activeAnnouncements.length, icon: "campaign", warn: false, action: () => setActiveTab("announcements") },
+    { label: "Days of Prayer Times", sublabel: sourceLabel, value: daysCovered, icon: "schedule", action: () => setActiveTab("prayer-times") },
+    { label: "Upcoming Events", sublabel: nextEventLabel ? `Next ${nextEventLabel}` : "None upcoming", value: upcomingEvents.length, icon: "calendar_month", action: () => setActiveTab("events") },
+    { label: "Active Announcements", sublabel: activeAnnouncements.length ? "On your website" : "None live", value: activeAnnouncements.length, icon: "campaign", action: () => setActiveTab("announcements") },
   ];
 
   const quickActions = [
@@ -157,14 +157,14 @@ const OverviewTab: React.FC<OverviewTabProps> = ({
       <section style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(3, 1fr)", gap: isMobile ? 10 : 16, marginBottom: 24 }}>
         {statCards.map(s => (
           <button key={s.label} onClick={s.action}
-            style={{ background: "var(--surface-low)", border: `1px solid ${s.warn ? "rgba(239,68,68,0.25)" : "var(--surface-mid)"}`, borderRadius: 2, padding: isMobile ? "16px" : "24px", textAlign: "left", cursor: "pointer", transition: "background 0.2s", display: "flex", flexDirection: "column", gap: 0 }}
+            style={{ background: "var(--surface-low)", border: "1px solid var(--surface-mid)", borderRadius: 2, padding: isMobile ? "16px" : "24px", textAlign: "left", cursor: "pointer", transition: "background 0.2s", display: "flex", flexDirection: "column", gap: 0 }}
             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "var(--surface-mid)"; }}
             onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "var(--surface-low)"; }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-              <div style={{ width: 40, height: 40, background: s.warn ? "rgba(239,68,68,0.06)" : "var(--accent-bg)", border: `1px solid ${s.warn ? "rgba(239,68,68,0.15)" : "var(--accent-bg)"}`, borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <span className="material-symbols-outlined" style={{ fontSize: 20, color: s.warn ? "#f87171" : "var(--accent)" }}>{s.warn ? "warning" : s.icon}</span>
+              <div style={{ width: 40, height: 40, background: "var(--accent-bg)", border: "1px solid var(--accent-bg)", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 20, color: "var(--accent)" }}>{s.icon}</span>
               </div>
-              <span style={{ fontSize: 9, fontWeight: 700, color: s.warn ? "#f87171" : "var(--text-ghost)", textTransform: "uppercase", letterSpacing: "0.15em", textAlign: "right" }}>{s.sublabel}</span>
+              <span style={{ fontSize: 9, fontWeight: 700, color: "var(--text-ghost)", textTransform: "uppercase", letterSpacing: "0.15em", textAlign: "right" }}>{s.sublabel}</span>
             </div>
             <div style={{ fontSize: isMobile ? 28 : 36, fontWeight: 800, color: "var(--text-max)", letterSpacing: "-0.04em", lineHeight: 1, marginBottom: 6 }}>{s.value}</div>
             <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{s.label}</div>
