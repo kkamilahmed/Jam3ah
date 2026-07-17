@@ -139,6 +139,7 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
   generatingYear,
 }) => {
   const isMobile = useIsMobile();
+  void _theme;
   const [batchOpen, setBatchOpen] = React.useState(false);
   const [showSummary, setShowSummary] = React.useState(false);
 
@@ -171,7 +172,7 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
   };
 
   return (
-    <div style={{ padding: isMobile ? "20px 16px 80px" : "40px 32px", fontFamily: "Manrope, sans-serif", background: "var(--surface-low)", minHeight: "100%" }}>
+    <div style={{ display: "flex", flexDirection: "column", padding: isMobile ? "20px 16px 80px" : "40px 32px", fontFamily: "Manrope, sans-serif", background: "var(--surface-low)", minHeight: "100%" }}>
 
       {/* ── Batch Apply Summary Modal ── */}
       {showSummary && (() => {
@@ -277,69 +278,70 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
         </div>
       </div>
 
-      {/* ── Today's Prayer Times ── */}
+      {/* ── Today's prayer board ── */}
       {(() => {
+        const row = todayRow as unknown as Record<string, string> | undefined;
+        const sourceLabel = row ? (prayerSource === "backend" ? "Auto-calculated" : "From Excel") : "No times loaded";
+        const time = (raw: string | undefined) => raw ? to12h(raw) : "—";
+        const adhanOf = (key: string) => row ? (row[`${key}_adhan`] || row[key]) : undefined;
+        const iqamaOf = (key: string) => row ? row[`${key}_iqama`] : undefined;
         return (
           <div style={{ background: "var(--surface-low)", border: "1px solid var(--surface-mid)", borderRadius: 2, marginBottom: 20, overflow: "hidden" }}>
-            <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--surface-high)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <div>
-                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.15em", marginBottom: 3 }}>Today</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-max)" }}>
+            {/* Board header */}
+            <div style={{ padding: isMobile ? "12px 16px" : "14px 22px", borderBottom: "1px solid var(--surface-high)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 7, flexShrink: 0 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
+                  <span style={{ fontSize: 14, fontWeight: 800, color: "var(--text-max)", letterSpacing: "-0.01em" }}>Today</span>
+                </span>
+                <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {new Date().toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
-                </div>
+                </span>
               </div>
-              <div style={{ fontSize: 11, color: "var(--text-phantom)", fontWeight: 600 }}>
-                {todayRow ? "" : "No times loaded"}
-              </div>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-ghost)", flexShrink: 0, whiteSpace: "nowrap" }}>{sourceLabel}</span>
             </div>
-            <div style={{ padding: 16, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(5, 1fr)", gap: isMobile ? 8 : 10 }}>
-              {PRAYER_META.map((p) => {
-                const row = todayRow as unknown as Record<string,string> | undefined;
-                const adhanT = row ? (row[`${p.key}_adhan`] || row[p.key] || "—") : "—";
-                const iqamaT = row ? (row[`${p.key}_iqama`] || "—") : "—";
-                return isMobile ? (
-                  <div key={p.key} style={{ background: "var(--surface-mid)", border: "1px solid var(--surface-high)", borderRadius: 2, display: "flex", alignItems: "center", padding: "10px 14px", gap: 12 }}>
-                    <div style={{ fontWeight: 800, color: "var(--text-max)", fontSize: 14, letterSpacing: "-0.02em", width: 68, flexShrink: 0 }}>{p.label}</div>
-                    <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 1fr" }}>
-                      {[
-                        { label: "Adhan", val: to12h(adhanT) },
-                        { label: "Iqama", val: to12h(iqamaT) },
-                      ].map(({ label, val }, idx) => (
-                        <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", borderLeft: idx === 1 ? "1px solid var(--surface-high)" : "none" }}>
-                          <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--accent)", marginBottom: 3 }}>{label}</div>
-                          <div style={{ fontSize: 14, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: "var(--text-max)" }}>{val}</div>
-                        </div>
-                      ))}
+            {/* Board body */}
+            {isMobile ? (
+              <div>
+                {PRAYER_META.map((p, idx) => (
+                  <div key={p.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 16px", borderTop: idx > 0 ? "1px solid var(--surface-mid)" : "none" }}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 9, minWidth: 0 }}>
+                      <span style={{ fontSize: 16, color: "var(--text-dim)", lineHeight: 1 }}>{p.arabic}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-max)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{p.label}</span>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexShrink: 0 }}>
+                      <span style={{ fontSize: 21, fontWeight: 800, color: "var(--text-max)", fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em", lineHeight: 1 }}>{time(adhanOf(p.key))}</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-ghost)", fontVariantNumeric: "tabular-nums", minWidth: 76, textAlign: "right" }}>
+                        <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-phantom)", marginRight: 5 }}>Iq</span>{time(iqamaOf(p.key))}
+                      </span>
                     </div>
                   </div>
-                ) : (
-                  <div key={p.key} style={{ background: "var(--surface-mid)", border: "1px solid var(--surface-high)", borderRadius: 2, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "16px 12px 12px", borderBottom: "1px solid var(--surface-high)" }}>
-                      <div style={{ fontWeight: 800, color: "var(--text-max)", fontSize: 16, letterSpacing: "-0.02em" }}>{p.label}</div>
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", flex: 1 }}>
-                      {[
-                        { label: "Adhan", val: to12h(adhanT) },
-                        { label: "Iqama", val: to12h(iqamaT) },
-                      ].map(({ label, val }, idx) => (
-                        <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "14px 6px", borderLeft: idx === 1 ? "1px solid var(--surface-high)" : "none" }}>
-                          <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", marginBottom: 6 }}>{label}</div>
-                          <div style={{ fontSize: 15, fontWeight: 800, fontVariantNumeric: "tabular-nums", textAlign: "center", color: "var(--text-max)" }}>{val}</div>
-                        </div>
-                      ))}
+                ))}
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)" }}>
+                {PRAYER_META.map((p, idx) => (
+                  <div key={p.key} style={{ padding: "22px 12px 20px", textAlign: "center", borderLeft: idx > 0 ? "1px solid var(--surface-mid)" : "none", display: "flex", flexDirection: "column", alignItems: "center" }}>
+                    <div style={{ fontSize: 18, color: "var(--text-dim)", lineHeight: 1, marginBottom: 7 }}>{p.arabic}</div>
+                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--text-ghost)", marginBottom: 14 }}>{p.label}</div>
+                    <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.03em", color: "var(--text-max)", fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>{time(adhanOf(p.key))}</div>
+                    <div style={{ width: 26, height: 1, background: "var(--surface-high)", margin: "13px 0" }} />
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-ghost)", fontVariantNumeric: "tabular-nums", display: "flex", alignItems: "baseline", gap: 6 }}>
+                      <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-phantom)" }}>Iqama</span>
+                      {time(iqamaOf(p.key))}
                     </div>
                   </div>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })()}
 
-      {/* ── Prayer Schedule Builder ── */}
+      {/* ── Prayer Schedule Builder — bulk-edit tool, rendered below the schedule (order:2) ── */}
       {(() => {
         return (
-          <div style={{ background: "var(--surface-low)", border: "1px solid var(--surface-mid)", borderRadius: 2, marginBottom: 32, overflow: "hidden" }}>
+          <div style={{ order: 2, background: "var(--surface-low)", border: "1px solid var(--surface-mid)", borderRadius: 2, marginBottom: 12, overflow: "hidden" }}>
 
             {/* ── Header ── */}
             <div style={{ padding: isMobile ? "14px 16px" : "18px 24px", borderBottom: batchOpen ? "1px solid var(--surface-high)" : "none", cursor: "pointer" }}
@@ -709,8 +711,11 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
         </div>
       )}
 
+      {/* ── Schedule: month selector bound to the table below ── */}
+      <div style={{ background: "var(--surface-low)", border: "1px solid var(--surface-mid)", borderRadius: 2, marginBottom: 24, overflow: "hidden" }}>
+
       {/* ── Month + Action bar ── */}
-      <div style={{ background: "var(--surface-low)", border: "1px solid var(--surface-mid)", borderRadius: 2, padding: "12px 16px", marginBottom: 20 }}>
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--surface-high)" }}>
         {isMobile ? (
           /* Mobile: month + year dropdowns */
           <div style={{ display: "flex", gap: 10 }}>
@@ -817,20 +822,20 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
 
       {/* Feedback messages */}
       {uploadSuccess && (
-        <div style={{ marginBottom: 14, padding: "12px 16px", background: "var(--accent-bg)", border: "1px solid var(--accent-bg)", borderRadius: 2, display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ margin: "12px 16px 0", padding: "12px 16px", background: "var(--accent-bg)", border: "1px solid var(--accent-bg)", borderRadius: 2, display: "flex", alignItems: "center", gap: 10 }}>
           <span className="material-symbols-outlined" style={{ fontSize: 16, color: "var(--accent)", flexShrink: 0 }}>check</span>
           <p style={{ color: "var(--accent)", fontWeight: 600, fontSize: 13, margin: 0 }}>{uploadSuccess}</p>
         </div>
       )}
       {uploadError && (
-        <div style={{ marginBottom: 14, padding: "12px 16px", background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 2 }}>
+        <div style={{ margin: "12px 16px 0", padding: "12px 16px", background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 2 }}>
           <p style={{ color: "#f87171", fontWeight: 600, fontSize: 13, margin: 0 }}>{uploadError}</p>
         </div>
       )}
 
       {/* ── Schedule table ── */}
       {prayerLoading ? (
-        <div style={{ border: "1px dashed var(--outline-variant)", borderRadius: 2, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "80px 0" }}>
+        <div style={{ borderTop: "1px solid var(--surface-high)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "80px 0" }}>
           <svg className="animate-spin h-10 w-10 mb-4" style={{ color: "var(--text-ghost)" }} viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
@@ -838,7 +843,7 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
           <div style={{ fontSize: 13, color: "var(--text-ghost)", fontWeight: 600 }}>Loading prayer times…</div>
         </div>
       ) : !prayerTimesByMonth[selectedMonth] ? (
-        <div style={{ border: "1px dashed var(--outline-variant)", borderRadius: 2, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "80px 0" }}>
+        <div style={{ borderTop: "1px solid var(--surface-high)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "80px 24px" }}>
           {(() => {
             const yearHasData = months.some(m => !!prayerTimesByMonth[m.value]);
             const isGenerating = generatingYear === selectedYear;
@@ -875,17 +880,17 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
                   No schedule for {months.find(m => m.value === selectedMonth)?.label}
                 </div>
                 <div style={{ fontSize: 13, color: "var(--text-dim)" }}>
-                  {prayerSource === "backend" ? "Use the Adhan & Iqama panel to apply times" : "Select a file and click Upload above"}
+                  {prayerSource === "backend" ? "Use the Prayer Schedule Builder below to apply times" : "Select a file and click Upload above"}
                 </div>
               </>
             );
           })()}
         </div>
       ) : (
-        <div style={{ background: "var(--surface-low)", border: "1px solid var(--surface-mid)", borderRadius: 2 }}>
+        <div style={{ borderTop: "1px solid var(--surface-high)" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", borderBottom: "1px solid var(--surface-high)" }}>
             <div>
-              <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", marginBottom: 4 }}>Monthly Schedule</div>
+              <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--text-ghost)", marginBottom: 4 }}>Monthly Schedule</div>
               <h2 style={{ fontSize: 20, fontWeight: 800, color: "var(--text-max)", margin: 0, letterSpacing: "-0.02em" }}>
                 {months.find((m) => m.value === selectedMonth)?.label}
               </h2>
@@ -932,8 +937,9 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
               const txtSz = compact ? 11 : 13;
               const tableCellInputStyle: React.CSSProperties = {
                 width: "100%", background: "transparent", border: "1px solid transparent", borderRadius: 2,
-                padding: compact ? "2px 4px" : "3px 6px", fontSize: txtSz, color: "#ffffff",
+                padding: compact ? "2px 4px" : "3px 6px", fontSize: txtSz, color: "var(--text-max)",
                 fontFamily: "Manrope, sans-serif", outline: "none", textAlign: "center", transition: "border-color 0.15s",
+                fontVariantNumeric: "tabular-nums",
               };
               const todayStr = new Date().toISOString().split("T")[0];
               const days = prayerTimesByMonth[selectedMonth];
@@ -945,14 +951,14 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
                       const d = day as unknown as Record<string, string>;
                       const isFriday = new Date(day.date + "T12:00:00").getDay() === 5;
                       const isToday = day.date === todayStr;
-                      const [, mm, dd] = day.date.split("-");
+                      const [, , dd] = day.date.split("-");
                       const weekday = new Date(day.date + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short" });
                       return (
                         <div key={i} style={{ borderTop: i > 0 ? "1px solid var(--surface-mid)" : undefined, background: isToday ? "rgba(52,211,153,0.04)" : undefined }}>
                           {/* Date header */}
-                          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 14px", borderLeft: isToday ? "3px solid var(--accent)" : "3px solid transparent", background: isToday ? "rgba(52,211,153,0.06)" : "var(--surface-mid)" }}>
-                            <span style={{ fontSize: 11, fontWeight: 800, color: isToday ? "var(--accent)" : "var(--text-max)" }}>{dd}/{mm}</span>
-                            <span style={{ fontSize: 10, fontWeight: 600, color: "var(--text-ghost)" }}>{weekday}</span>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 14px", borderLeft: isToday ? "3px solid var(--accent)" : isFriday ? "3px solid var(--accent-border)" : "3px solid transparent", background: isToday ? "rgba(52,211,153,0.06)" : isFriday ? "rgba(52,211,153,0.035)" : "var(--surface-mid)" }}>
+                            <span style={{ fontSize: 12, fontWeight: 800, color: isToday ? "var(--accent)" : "var(--text-max)", fontVariantNumeric: "tabular-nums" }}>{Number(dd)}</span>
+                            <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: isToday || isFriday ? "var(--accent)" : "var(--text-ghost)" }}>{weekday}</span>
                             {isToday && <span style={{ fontSize: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--accent)", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2, padding: "1px 5px" }}>Today</span>}
                           </div>
                           {/* Prayer rows */}
@@ -1037,12 +1043,18 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
                   <tbody>
                     {days.map((day, i) => {
                       const d = day as unknown as Record<string, string>;
-                      const isFriday = new Date(day.date + "T12:00:00").getDay() === 5;
+                      const dObj = new Date(day.date + "T12:00:00");
+                      const isFriday = dObj.getDay() === 5;
                       const isToday = day.date === todayStr;
+                      const weekday = dObj.toLocaleDateString("en-CA", { weekday: "short" });
+                      const dayNum = Number(day.date.split("-")[2]);
                       return (
-                        <tr key={i} style={{ borderBottom: "1px solid var(--surface-mid)", background: isToday ? "rgba(52,211,153,0.05)" : i % 2 === 0 ? "var(--surface-low)" : "var(--surface)" }}>
-                          <td style={{ padding: compact ? "5px 6px" : "6px 8px", fontWeight: 700, fontSize: txtSz, color: "var(--text-max)", textAlign: "center" }}>
-                            {day.date.split("-").slice(1).join("/")}
+                        <tr key={i} style={{ borderBottom: "1px solid var(--surface-mid)", background: isToday ? "rgba(52,211,153,0.06)" : isFriday ? "rgba(52,211,153,0.035)" : i % 2 === 0 ? "var(--surface-low)" : "var(--surface)" }}>
+                          <td style={{ padding: compact ? "4px 6px" : "5px 8px", textAlign: "center", borderLeft: isToday ? "2px solid var(--accent)" : "2px solid transparent" }}>
+                            <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.05 }}>
+                              <span style={{ fontWeight: 800, fontSize: txtSz, color: isToday ? "var(--accent)" : "var(--text-max)", fontVariantNumeric: "tabular-nums" }}>{dayNum}</span>
+                              <span style={{ fontSize: compact ? 8 : 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: isToday || isFriday ? "var(--accent)" : "var(--text-phantom)" }}>{weekday}</span>
+                            </div>
                           </td>
                           {PRAYER_META.map((p) => {
                             const start = day[p.key] as string;
@@ -1089,6 +1101,7 @@ const PrayerTimesTab: React.FC<PrayerTimesTabProps> = ({
           </div>
         </div>
       )}
+      </div>{/* end schedule wrapper (month bar + table bound) */}
 
       {/* ── Excel Column Mapping Modal ── */}
       {xlsxPreview && (() => {

@@ -34,7 +34,7 @@ const TutorialOverlay: React.FC<Props> = ({ onClose, setActiveTab }) => {
       target: "[data-tour='nav-tabs']",
       placement: "bottom",
       title: "Navigation",
-      description: "Use these four tabs to move between sections of your dashboard.",
+      description: "Use these five tabs to move between sections of your dashboard.",
       action: () => setActiveTab("overview"),
       tryCta: "Try clicking a tab",
     },
@@ -42,7 +42,7 @@ const TutorialOverlay: React.FC<Props> = ({ onClose, setActiveTab }) => {
       target: "[data-tour='tab-overview']",
       placement: "bottom",
       title: "Overview",
-      description: "See today's prayer times, upcoming events, and announcements — your daily command center.",
+      description: "Your daily command center: today's prayer times, upcoming events, and announcements. The quick actions along the top jump straight into creating an event, posting an announcement, or editing prayer times.",
       action: () => setActiveTab("overview"),
     },
     {
@@ -56,10 +56,18 @@ const TutorialOverlay: React.FC<Props> = ({ onClose, setActiveTab }) => {
     {
       target: "[data-tour='tab-events']",
       placement: "bottom",
-      title: "Events & Announcements",
-      description: "Create upcoming events and post pinned announcements that display on your congregation's screens.",
+      title: "Events",
+      description: "Create and manage upcoming events for your community — talks, classes, fundraisers, and more.",
       action: () => setActiveTab("events"),
       tryCta: "Explore events",
+    },
+    {
+      target: "[data-tour='tab-announcements']",
+      placement: "bottom",
+      title: "Announcements",
+      description: "Post announcements that display on your congregation's screens. Give one an expiry date and it retires itself.",
+      action: () => setActiveTab("announcements"),
+      tryCta: "Explore announcements",
     },
     {
       target: "[data-tour='tab-settings']",

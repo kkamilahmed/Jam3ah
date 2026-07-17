@@ -10,10 +10,11 @@ import useIsMobile from "../../hooks/useIsMobile";
 interface EventsTabProps {
   theme: typeof THEMES[ThemeKey];
   events: Event[];
-  setEvents: React.Dispatch<React.SetStateAction<Event[]>>;
   eventsLoading: boolean;
   eventsSubTab: "events" | "announcements";
-  setEventsSubTab: React.Dispatch<React.SetStateAction<"events" | "announcements">>;
+  openNewEvent: () => void;
+  openNewAnnouncement: () => void;
+  showToast: (message: string, kind?: "success" | "error") => void;
   announcements: Announcement[];
   setAnnouncements: React.Dispatch<React.SetStateAction<Announcement[]>>;
   editingEvent: Event | null;
@@ -40,7 +41,8 @@ const inp: React.CSSProperties = {
 const lbl: React.CSSProperties = { display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-ghost)", marginBottom: 6 };
 
 const EventsTab: React.FC<EventsTabProps> = ({
-  events, setEvents: _setEvents, eventsLoading, eventsSubTab, setEventsSubTab,
+  events, eventsLoading, eventsSubTab,
+  openNewEvent, openNewAnnouncement, showToast,
   announcements, setAnnouncements, editingEvent, setEditingEvent,
   editingAnnouncement, setEditingAnnouncement, announcementForm, setAnnouncementForm,
   eventForm, setEventForm, eventsPanel, setEventsPanel,
@@ -52,16 +54,6 @@ const EventsTab: React.FC<EventsTabProps> = ({
 
   const navH = 60;
 
-  const openNewEvent = () => {
-    setEditingEvent(null);
-    setEventForm({ title: "", description: "", date: "", time: "", endTime: "", category: "General" });
-    setEventsPanel(true);
-  };
-  const openNewAnnouncement = () => {
-    setEditingAnnouncement(null);
-    setAnnouncementForm({ title: "", body: "", expiresAt: "" });
-    setEventsPanel(true);
-  };
   const closePanel = () => {
     setEventsPanel(false);
     setEditingEvent(null);
@@ -160,19 +152,24 @@ const EventsTab: React.FC<EventsTabProps> = ({
               style={{ flex: 1, padding: "11px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, color: "var(--text-ghost)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Cancel</button>
             <button
               onClick={async () => {
-                if (!announcementForm.title || !announcementForm.body) return;
+                if (!announcementForm.title || !announcementForm.body) {
+                  showToast("Fill in all required fields", "error");
+                  return;
+                }
                 const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
                 const row = { masjid_id: masjidId, title: announcementForm.title, body: announcementForm.body, expires_at: announcementForm.expiresAt || null };
+                const wasEditing = !!editingAnnouncement;
                 if (editingAnnouncement) {
                   const { error } = await supabaseAdmin.from("announcements").update(row).eq("id", editingAnnouncement.id);
-                  if (error) { alert("Failed to save: " + error.message); return; }
+                  if (error) { showToast("Failed to save announcement: " + error.message, "error"); return; }
                   setAnnouncements(prev => prev.map(a => a.id === editingAnnouncement.id ? { ...a, ...announcementForm } : a));
                 } else {
                   const { data, error } = await supabaseAdmin.from("announcements").insert(row).select().single();
-                  if (error) { alert("Failed to post: " + error.message); return; }
+                  if (error) { showToast("Failed to post announcement: " + error.message, "error"); return; }
                   setAnnouncements(prev => [...prev, { id: data.id, title: data.title, body: data.body || "", createdAt: data.created_at || today, expiresAt: data.expires_at || "" }]);
                 }
                 closePanel();
+                showToast(wasEditing ? "Announcement updated" : "Announcement posted");
               }}
               style={{ flex: 1, padding: "11px", background: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 2, color: "var(--accent-text)", fontFamily: "Manrope, sans-serif", fontWeight: 700, fontSize: 13, cursor: "pointer" }}
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "var(--accent-light)"; }}
@@ -223,7 +220,9 @@ const EventsTab: React.FC<EventsTabProps> = ({
           <div style={{ display: "flex", alignItems: isMobile ? "center" : "flex-start", justifyContent: "space-between", marginBottom: 24, gap: 12 }}>
             <div>
               {!isMobile && <div style={{ fontSize: 10, fontWeight: 600, color: "var(--outline)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Management</div>}
-              <h1 style={{ fontSize: isMobile ? 17 : 20, fontWeight: 800, color: "var(--on-surface)", margin: 0, letterSpacing: "-0.02em" }}>Events & Announcements</h1>
+              <h1 style={{ fontSize: isMobile ? 17 : 20, fontWeight: 800, color: "var(--on-surface)", margin: 0, letterSpacing: "-0.02em" }}>
+                {eventsSubTab === "events" ? "Events" : "Announcements"}
+              </h1>
             </div>
             <button onClick={eventsSubTab === "events" ? openNewEvent : openNewAnnouncement}
               style={{ display: "flex", alignItems: "center", gap: 6, padding: isMobile ? "8px 12px" : "9px 16px", background: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 2, color: "var(--accent-text)", fontFamily: "Manrope, sans-serif", fontWeight: 700, fontSize: isMobile ? 12 : 13, cursor: "pointer", transition: "background 0.12s", flexShrink: 0 }}
@@ -232,24 +231,6 @@ const EventsTab: React.FC<EventsTabProps> = ({
               <span className="material-symbols-outlined" style={{ fontSize: 15 }}>add</span>
               {eventsSubTab === "events" ? "New Event" : "New Announcement"}
             </button>
-          </div>
-
-          {/* Sub-tabs */}
-          <div style={{ display: "flex", gap: 0, background: "var(--surface)", border: "1px solid var(--surface-mid)", borderRadius: 2, padding: 3, width: "fit-content", marginBottom: 22 }}>
-            {([
-              { k: "events" as const, label: "Events", icon: "calendar_month" },
-              { k: "announcements" as const, label: "Announcements", icon: "campaign" },
-            ]).map(t => (
-              <button key={t.k}
-                onClick={() => { setEventsSubTab(t.k); setEventsPanel(false); setEditingEvent(null); setEditingAnnouncement(null); }}
-                style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 14px", borderRadius: 2, border: "1px solid transparent", background: eventsSubTab === t.k ? "var(--surface-high)" : "transparent", borderColor: eventsSubTab === t.k ? "var(--outline-variant)" : "transparent", color: eventsSubTab === t.k ? "var(--on-surface)" : "var(--text-phantom)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer", transition: "all 0.12s" }}>
-                <span className="material-symbols-outlined" style={{ fontSize: 15 }}>{t.icon}</span>
-                {t.label}
-                {t.k === "announcements" && announcements.length > 0 && (
-                  <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-phantom)", padding: "1px 6px", background: "var(--surface-mid)", borderRadius: 2 }}>{announcements.length}</span>
-                )}
-              </button>
-            ))}
           </div>
 
           {/* Events grid */}
@@ -354,8 +335,9 @@ const EventsTab: React.FC<EventsTabProps> = ({
                             onClick={async () => {
                               if (!confirm("Delete this announcement?")) return;
                               const { error } = await supabaseAdmin.from("announcements").delete().eq("id", ann.id);
-                              if (error) { alert("Failed to delete: " + error.message); return; }
+                              if (error) { showToast("Failed to delete announcement: " + error.message, "error"); return; }
                               setAnnouncements(prev => prev.filter(a => a.id !== ann.id));
+                              showToast("Announcement deleted");
                             }}
                             style={{ flex: 1, padding: "7px 0", background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 2, color: "#f87171", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>Delete</button>
                         </div>

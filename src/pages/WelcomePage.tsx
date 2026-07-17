@@ -98,10 +98,6 @@ const inputStyle: React.CSSProperties = {
   transition: "border-color 0.15s", boxSizing: "border-box",
 };
 
-const selectStyle: React.CSSProperties = {
-  ...inputStyle, appearance: "none" as const, WebkitAppearance: "none" as const, cursor: "pointer",
-};
-
 const labelStyle: React.CSSProperties = {
   display: "block", fontSize: 12, fontWeight: 600,
   color: "var(--on-surface-variant)", marginBottom: 7, letterSpacing: "0.02em",

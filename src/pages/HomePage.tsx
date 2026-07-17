@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import useIsMobile from "../hooks/useIsMobile";
 import * as XLSX from "xlsx";
@@ -29,28 +29,43 @@ import {
   type PrayerPreset,
   type MonthPresetMap,
 } from "../dashboard/constants";
-// CrescentIcon imported for potential future use
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 
 import OverviewTab from "../dashboard/tabs/OverviewTab";
 import PrayerTimesTab from "../dashboard/tabs/PrayerTimesTab";
 import EventsTab from "../dashboard/tabs/EventsTab";
 import SettingsTab from "../dashboard/tabs/SettingsTab";
 import TutorialOverlay from "../components/TutorialOverlay";
+import Toast, { type ToastState, type ToastKind } from "../dashboard/components/Toast";
 
 // ── Dashboard Component ───────────────────────────────────────────────────
-const VALID_TABS = ["overview", "prayer-times", "events", "settings"];
+const VALID_TABS = [
+  "overview",
+  "prayer-times",
+  "events",
+  "announcements",
+  "settings",
+];
 
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const { tab } = useParams<{ tab: string }>();
   const activeTab = VALID_TABS.includes(tab ?? "") ? tab! : "overview";
+  // Events and Announcements are separate top-level tabs sharing one component.
+  const eventsSubTab: "events" | "announcements" =
+    activeTab === "announcements" ? "announcements" : "events";
 
   const [seenTabs, setSeenTabs] = useState<Set<string>>(() => {
     try { return new Set<string>(JSON.parse(localStorage.getItem("seen_tabs") || '["overview"]')); }
     catch { return new Set(["overview"]); }
   });
   const [showTutorial, setShowTutorial] = useState(() => !localStorage.getItem("tour_seen"));
+
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const toastId = useRef(0);
+  const showToast = useCallback((message: string, kind: ToastKind = "success") => {
+    setToast({ message, kind, id: ++toastId.current });
+  }, []);
+  const dismissToast = useCallback(() => setToast(null), []);
 
   const setActiveTab = (t: string) => {
     setSeenTabs(prev => {
@@ -82,7 +97,6 @@ const Dashboard: React.FC = () => {
       localStorage.setItem("app_theme", "light");
     }
   };
-  const [settingsTab, setSettingsTab] = useState<string>("profile");
   const [mounted, setMounted] = useState(false);
   const [animDone, setAnimDone] = useState(false);
   const [currentTime, setCurrentTime] = useState<Date>(new Date());
@@ -240,9 +254,6 @@ const Dashboard: React.FC = () => {
   // ── Events state ──────────────────────────────────────────────────────
   const [events, setEvents] = useState<Event[]>([]);
   const [eventsLoading, setEventsLoading] = useState(true);
-  const [eventsSubTab, setEventsSubTab] = useState<"events" | "announcements">(
-    "events",
-  );
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [editingAnnouncement, setEditingAnnouncement] =
     useState<Announcement | null>(null);
@@ -634,7 +645,7 @@ const Dashboard: React.FC = () => {
     const masjidId =
       sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
     if (masjidId) {
-      await supabaseAdmin.from("prayer_settings").upsert(
+      const { error } = await supabaseAdmin.from("prayer_settings").upsert(
         {
           masjid_id: masjidId,
           presets: prayerPresets,
@@ -646,11 +657,16 @@ const Dashboard: React.FC = () => {
         },
         { onConflict: "masjid_id" },
       );
+      if (error) {
+        showToast("Failed to save presets: " + error.message, "error");
+        return;
+      }
     }
     setSavedPrayerPresets(prayerPresets);
     setSavedMonthPresetMap(monthPresetMap);
     setPresetsSaved(true);
     setTimeout(() => setPresetsSaved(false), 3000);
+    showToast("Prayer presets saved");
   };
 
   const handleCancelPresets = () => {
@@ -661,15 +677,6 @@ const Dashboard: React.FC = () => {
   const handleSavePresetsOnly = () => doSavePresets();
   const hasGeneratedMonths =
     prayerSource === "backend" && Object.keys(prayerTimesByMonth).length > 0;
-
-  const handleSavePresets = () => {
-    const generatedMonths = Object.keys(prayerTimesByMonth).sort();
-    if (prayerSource === "backend" && generatedMonths.length > 0) {
-      setPresetRegenConfirm(true);
-    } else {
-      doSavePresets();
-    }
-  };
 
   const handleConfirmPresetRegen = async () => {
     setPresetRegenConfirm(false);
@@ -727,7 +734,7 @@ const Dashboard: React.FC = () => {
     const masjidId =
       sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
     if (!masjidId) {
-      alert("No masjid ID found. Please log in again.");
+      showToast("No masjid ID found. Please log in again.", "error");
       return;
     }
     const { error } = await supabaseAdmin
@@ -742,7 +749,7 @@ const Dashboard: React.FC = () => {
       })
       .eq("id", masjidId);
     if (error) {
-      alert("Failed to save: " + error.message);
+      showToast("Failed to save: " + error.message, "error");
       return;
     }
     sessionStorage.setItem("masjid_name", generalSettings.masjidName);
@@ -750,6 +757,7 @@ const Dashboard: React.FC = () => {
     setSavedGeneralSettings(generalSettings);
     setSettingsSaved(true);
     setTimeout(() => setSettingsSaved(false), 3000);
+    showToast("Masjid profile saved");
   };
 
   const handleBatchApply = async () => {
@@ -870,6 +878,7 @@ const Dashboard: React.FC = () => {
     setApplyingBatch(false);
     setBatchApplied(true);
     setTimeout(() => setBatchApplied(false), 2500);
+    showToast(`Applied to ${upsertRows.length} days`);
   };
 
   const handleConfirmSourceSwitch = async () => {
@@ -1206,9 +1215,14 @@ const Dashboard: React.FC = () => {
       ...day,
     }));
     for (let i = 0; i < rows.length; i += 100) {
-      await supabaseAdmin
+      const { error } = await supabaseAdmin
         .from("prayer_times")
         .upsert(rows.slice(i, i + 100), { onConflict: "masjid_id,date" });
+      if (error) {
+        setSavingSchedule(false);
+        showToast("Failed to save schedule: " + error.message, "error");
+        return;
+      }
     }
     setSavingSchedule(false);
     setSavedSchedule(true);
@@ -1217,6 +1231,7 @@ const Dashboard: React.FC = () => {
       prayerTimesByMonth[selectedMonth] || []
     ).map((r) => ({ ...r }));
     setTimeout(() => setSavedSchedule(false), 2500);
+    showToast(`Prayer schedule saved (${rows.length} days)`);
   };
 
   const handleDiscardChanges = () => {
@@ -1228,7 +1243,7 @@ const Dashboard: React.FC = () => {
 
   const handleEventSubmit = async () => {
     if (!eventForm.title || !eventForm.date || !eventForm.time) {
-      alert("Fill in all required fields");
+      showToast("Fill in all required fields", "error");
       return;
     }
     const masjidId =
@@ -1247,7 +1262,7 @@ const Dashboard: React.FC = () => {
         .update(row)
         .eq("id", editingEvent.id);
       if (error) {
-        alert("Failed to save: " + error.message);
+        showToast("Failed to save event: " + error.message, "error");
         return;
       }
       setEvents((prev) =>
@@ -1262,7 +1277,7 @@ const Dashboard: React.FC = () => {
         .select()
         .single();
       if (error) {
-        alert("Failed to create: " + error.message);
+        showToast("Failed to create event: " + error.message, "error");
         return;
       }
       setEvents((prev) => [
@@ -1278,6 +1293,7 @@ const Dashboard: React.FC = () => {
         },
       ]);
     }
+    const wasEditing = !!editingEvent;
     setEventsPanel(false);
     setEventForm({
       title: "",
@@ -1288,16 +1304,18 @@ const Dashboard: React.FC = () => {
       category: "General",
     });
     setEditingEvent(null);
+    showToast(wasEditing ? "Event updated" : "Event created");
   };
 
   const handleDeleteEvent = async (id: string) => {
     if (!confirm("Delete this event?")) return;
     const { error } = await supabaseAdmin.from("events").delete().eq("id", id);
     if (error) {
-      alert("Failed to delete: " + error.message);
+      showToast("Failed to delete event: " + error.message, "error");
       return;
     }
     setEvents((prev) => prev.filter((e) => e.id !== id));
+    showToast("Event deleted");
   };
 
   const handleEditEvent = (event: Event) => {
@@ -1313,12 +1331,46 @@ const Dashboard: React.FC = () => {
     setEventsPanel(true);
   };
 
+  // Open a blank create form. Also navigates, so Overview can deep-link here.
+  const openNewEvent = () => {
+    setEditingEvent(null);
+    setEventForm({
+      title: "",
+      description: "",
+      date: "",
+      time: "",
+      endTime: "",
+      category: "General",
+    });
+    setEventsPanel(true);
+    setActiveTab("events");
+  };
+
+  const openNewAnnouncement = () => {
+    setEditingAnnouncement(null);
+    setAnnouncementForm({ title: "", body: "", expiresAt: "" });
+    setEventsPanel(true);
+    setActiveTab("announcements");
+  };
+
   // ── Nav tabs ──────────────────────────────────────────────────────────
+  // `short` is used only in the mobile bottom bar, where five labels must fit.
   const navTabs = [
-    { id: "prayer-times", name: "Prayer Times", ms: "schedule" },
-    { id: "overview", name: "Overview", ms: "dashboard" },
-    { id: "events", name: "Events", ms: "calendar_month" },
-    { id: "settings", name: "Settings", ms: "settings" },
+    { id: "overview", name: "Overview", short: "Overview", ms: "dashboard" },
+    {
+      id: "prayer-times",
+      name: "Prayer Times",
+      short: "Prayers",
+      ms: "schedule",
+    },
+    { id: "events", name: "Events", short: "Events", ms: "calendar_month" },
+    {
+      id: "announcements",
+      name: "Announcements",
+      short: "Notices",
+      ms: "campaign",
+    },
+    { id: "settings", name: "Settings", short: "Settings", ms: "settings" },
   ];
 
   const navH = 56;
@@ -1649,9 +1701,10 @@ const Dashboard: React.FC = () => {
                     fontWeight: isActive ? 700 : 500,
                     color: isActive ? "var(--accent)" : "var(--text-phantom)",
                     fontFamily: "Manrope, sans-serif",
+                    whiteSpace: "nowrap",
                   }}
                 >
-                  {tab.name}
+                  {tab.short}
                 </span>
               </button>
             );
@@ -1678,8 +1731,10 @@ const Dashboard: React.FC = () => {
             events={events}
             announcements={announcements}
             prayerTimesByMonth={prayerTimesByMonth}
+            prayerSource={prayerSource}
             setActiveTab={setActiveTab}
-            setEventsSubTab={setEventsSubTab}
+            openNewEvent={openNewEvent}
+            openNewAnnouncement={openNewAnnouncement}
           />
         )}
 
@@ -1741,14 +1796,15 @@ const Dashboard: React.FC = () => {
           />
         )}
 
-        {activeTab === "events" && (
+        {(activeTab === "events" || activeTab === "announcements") && (
           <EventsTab
             theme={theme}
             events={events}
-            setEvents={setEvents}
             eventsLoading={eventsLoading}
             eventsSubTab={eventsSubTab}
-            setEventsSubTab={setEventsSubTab}
+            openNewEvent={openNewEvent}
+            openNewAnnouncement={openNewAnnouncement}
+            showToast={showToast}
             announcements={announcements}
             setAnnouncements={setAnnouncements}
             editingEvent={editingEvent}
@@ -1770,8 +1826,6 @@ const Dashboard: React.FC = () => {
         {activeTab === "settings" && (
           <SettingsTab
             theme={theme}
-            settingsTab={settingsTab}
-            setSettingsTab={setSettingsTab}
             registeredEmail={registeredEmail}
             generalSettings={generalSettings}
             setGeneralSettings={setGeneralSettings}
@@ -1788,7 +1842,6 @@ const Dashboard: React.FC = () => {
             handleDeletePreset={handleDeletePreset}
             handleUpdatePreset={handleUpdatePreset}
             handleSetMonthPreset={handleSetMonthPreset}
-            handleSavePresets={handleSavePresets}
             presetsSaved={presetsSaved}
             savedPrayerPresets={savedPrayerPresets}
             savedMonthPresetMap={savedMonthPresetMap}
@@ -1980,6 +2033,8 @@ const Dashboard: React.FC = () => {
       {showTutorial && (
         <TutorialOverlay onClose={handleCloseTutorial} setActiveTab={setActiveTab} />
       )}
+
+      <Toast toast={toast} onDismiss={dismissToast} />
     </div>
   );
 };

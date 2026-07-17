@@ -62,10 +62,6 @@ const sectionLabel: React.CSSProperties = {
   letterSpacing: "0.15em", color: "var(--text-faint)", fontFamily: F,
 };
 
-const RED       = "#f87171";
-const RED_BG    = "rgba(248,113,113,0.1)";
-const RED_BORDER = "rgba(248,113,113,0.25)";
-
 const btnPrimary: React.CSSProperties = {
   display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
   padding: "9px 20px", background: "var(--accent)", color: "var(--accent-text)",

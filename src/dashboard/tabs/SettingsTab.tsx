@@ -14,8 +14,6 @@ import LocationMap from "../components/LocationMap";
 
 interface SettingsTabProps {
   theme: typeof THEMES[ThemeKey];
-  settingsTab: string;
-  setSettingsTab: React.Dispatch<React.SetStateAction<string>>;
   registeredEmail: string;
   generalSettings: {
     masjidName: string;
@@ -49,7 +47,6 @@ interface SettingsTabProps {
   handleDeletePreset: (id: string) => void;
   handleUpdatePreset: (id: string, patch: Partial<PrayerPreset>) => void;
   handleSetMonthPreset: (month: number, presetId: string) => void;
-  handleSavePresets: () => void;
   presetsSaved: boolean;
   savedPrayerPresets: PrayerPreset[];
   savedMonthPresetMap: MonthPresetMap;
@@ -108,19 +105,21 @@ const cardBodyStyle: React.CSSProperties = {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-const Card: React.FC<{ title: string; subtitle?: string; children: React.ReactNode; headerExtra?: React.ReactNode; compact?: boolean; noPadding?: boolean }> = ({
+const Card: React.FC<{ title?: string; subtitle?: string; children: React.ReactNode; headerExtra?: React.ReactNode; compact?: boolean; noPadding?: boolean }> = ({
   title, subtitle, children, headerExtra, compact = false, noPadding = false,
 }) => (
   <div style={cardStyle}>
-    <div style={{ ...cardHeaderStyle, padding: compact ? "12px 16px" : "18px 24px", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontFamily: "Manrope, sans-serif", fontSize: compact ? 14 : 15, fontWeight: 800, color: "var(--text-max)", letterSpacing: "-0.02em" }}>{title}</div>
-        {subtitle && (
-          <div style={{ fontFamily: "Manrope, sans-serif", fontSize: compact ? 12 : 13, color: "var(--text-dim)", fontWeight: 400, marginTop: 4 }}>{subtitle}</div>
-        )}
+    {(title || headerExtra) && (
+      <div style={{ ...cardHeaderStyle, padding: compact ? "12px 16px" : "18px 24px", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          {title && <div style={{ fontFamily: "Manrope, sans-serif", fontSize: compact ? 14 : 15, fontWeight: 800, color: "var(--text-max)", letterSpacing: "-0.02em" }}>{title}</div>}
+          {subtitle && (
+            <div style={{ fontFamily: "Manrope, sans-serif", fontSize: compact ? 12 : 13, color: "var(--text-dim)", fontWeight: 400, marginTop: 4 }}>{subtitle}</div>
+          )}
+        </div>
+        {headerExtra && <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>{headerExtra}</div>}
       </div>
-      {headerExtra && <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>{headerExtra}</div>}
-    </div>
+    )}
     <div style={noPadding ? undefined : { ...cardBodyStyle, padding: compact ? "16px 16px" : "20px 24px" }}>{children}</div>
   </div>
 );
@@ -137,9 +136,15 @@ const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, 
 const PRESET_DOTS = ["#34d399","#60a5fa","#f472b6","#fb923c","#a78bfa"];
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
+const SectionHeading: React.FC<{ label: string; action?: React.ReactNode }> = ({ label, action }) => (
+  <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 8, paddingBottom: 12, borderBottom: "1px solid var(--outline-subtle)" }}>
+    <h2 style={{ margin: 0, fontFamily: "Manrope, sans-serif", fontSize: 17, fontWeight: 800, color: "var(--text-max)", letterSpacing: "-0.02em" }}>{label}</h2>
+    {action && <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>{action}</div>}
+  </div>
+);
+
 const SettingsTab: React.FC<SettingsTabProps> = ({
   theme,
-  settingsTab, setSettingsTab,
   registeredEmail,
   generalSettings, setGeneralSettings,
   settingsSaved, savedGeneralSettings, handleSaveSettings,
@@ -148,7 +153,7 @@ const SettingsTab: React.FC<SettingsTabProps> = ({
   extraTimings, setExtraTimings,
   prayerPresets, monthPresetMap,
   handleAddPreset, handleDeletePreset, handleUpdatePreset,
-  handleSetMonthPreset, handleSavePresets, presetsSaved,
+  handleSetMonthPreset, presetsSaved,
   savedPrayerPresets, savedMonthPresetMap, handleCancelPresets,
   handleSavePresetsOnly, handleSavePresetsAndRegen, hasGeneratedMonths,
 }) => {
@@ -158,6 +163,8 @@ const SettingsTab: React.FC<SettingsTabProps> = ({
   const [feedExplainerOpen, setFeedExplainerOpen] = useState(false);
   const [mapFlyTrigger, setMapFlyTrigger] = useState(0);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState<Record<string, boolean>>({});
+  const [editingLocation, setEditingLocation] = useState(false);
 
   const hasPresetChanges =
     JSON.stringify(prayerPresets) !== JSON.stringify(savedPrayerPresets) ||
@@ -171,8 +178,12 @@ const SettingsTab: React.FC<SettingsTabProps> = ({
   };
 
   void theme;
-  void settingsTab;
-  void setSettingsTab;
+
+  const sectionStyle: React.CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    gap: 20,
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 73px)", background: "var(--bg)", fontFamily: "Manrope, sans-serif", overflowX: "hidden" }}>
@@ -181,10 +192,13 @@ const SettingsTab: React.FC<SettingsTabProps> = ({
       <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "20px 16px 80px" : "28px 32px" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
 
+          {/* ── Masjid Profile ── */}
+          <section id="settings-profile" style={sectionStyle}>
             {(() => {
               const hasChanges = JSON.stringify(generalSettings) !== JSON.stringify(savedGeneralSettings);
               return (
-                <Card compact={isMobile} title="Masjid Profile" headerExtra={
+                <>
+                <SectionHeading label="Masjid Profile" action={
                   hasChanges ? (
                     <button onClick={handleSaveSettings} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 16px", background: "var(--accent)", color: "var(--accent-text)", border: "none", borderRadius: 2, fontFamily: "Manrope, sans-serif", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
                       <span className="material-symbols-outlined" style={{ fontSize: 14 }}>save</span>
@@ -196,7 +210,8 @@ const SettingsTab: React.FC<SettingsTabProps> = ({
                       Saved
                     </span>
                   ) : null
-                }>
+                } />
+                <Card compact={isMobile}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
                     <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
@@ -243,49 +258,81 @@ const SettingsTab: React.FC<SettingsTabProps> = ({
 
                   </div>
                 </Card>
+                </>
               );
             })()}
+          </section>
 
-          {/* ── Prayer Settings section divider ── */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--text-faint)", whiteSpace: "nowrap" }}>Prayer Settings</div>
-            <div style={{ flex: 1, height: 1, background: "var(--outline-subtle)" }} />
-          </div>
+          {/* ── Prayer Configuration ── */}
+          <section id="settings-prayer" style={sectionStyle}>
+            <SectionHeading label="Prayer Configuration" />
 
             {/* Location + Jamaats/Jummah side by side */}
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, alignItems: "stretch" }}>
 
               {/* Left: Location */}
               <div style={{ ...cardStyle, display: "flex", flexDirection: "column" }}>
-                <div style={{ ...cardHeaderStyle, padding: isMobile ? "12px 16px" : "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ ...cardHeaderStyle, padding: isMobile ? "12px 16px" : "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                   <div style={{ fontFamily: "Manrope, sans-serif", fontSize: isMobile ? 14 : 15, fontWeight: 800, color: "var(--text-max)", letterSpacing: "-0.02em" }}>Location</div>
-                  <button
-                    onClick={() => setMapFlyTrigger(t => t + 1)}
-                    style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 11px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, fontFamily: "Manrope, sans-serif", fontSize: 11, fontWeight: 700, color: "var(--text-ghost)", cursor: "pointer", transition: "border-color 0.15s, color 0.15s" }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--outline)"; (e.currentTarget as HTMLElement).style.color = "var(--on-surface)"; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--outline-variant)"; (e.currentTarget as HTMLElement).style.color = "var(--text-ghost)"; }}>
-                    <span className="material-symbols-outlined" style={{ fontSize: 13 }}>my_location</span>
-                    Back to pin
-                  </button>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {editingLocation && (
+                      <button
+                        onClick={() => setMapFlyTrigger(t => t + 1)}
+                        style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 11px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, fontFamily: "Manrope, sans-serif", fontSize: 11, fontWeight: 700, color: "var(--text-ghost)", cursor: "pointer", transition: "border-color 0.15s, color 0.15s" }}
+                        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--outline)"; (e.currentTarget as HTMLElement).style.color = "var(--on-surface)"; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--outline-variant)"; (e.currentTarget as HTMLElement).style.color = "var(--text-ghost)"; }}>
+                        <span className="material-symbols-outlined" style={{ fontSize: 13 }}>my_location</span>
+                        Back to pin
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setEditingLocation(e => !e)}
+                      style={editingLocation
+                        ? { display: "flex", alignItems: "center", gap: 5, padding: "5px 13px", background: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 2, fontFamily: "Manrope, sans-serif", fontSize: 11, fontWeight: 700, color: "var(--accent-text)", cursor: "pointer" }
+                        : { display: "flex", alignItems: "center", gap: 5, padding: "5px 11px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, fontFamily: "Manrope, sans-serif", fontSize: 11, fontWeight: 700, color: "var(--text-ghost)", cursor: "pointer", transition: "border-color 0.15s, color 0.15s" }}
+                      onMouseEnter={e => { if (!editingLocation) { (e.currentTarget as HTMLElement).style.borderColor = "var(--outline)"; (e.currentTarget as HTMLElement).style.color = "var(--on-surface)"; } }}
+                      onMouseLeave={e => { if (!editingLocation) { (e.currentTarget as HTMLElement).style.borderColor = "var(--outline-variant)"; (e.currentTarget as HTMLElement).style.color = "var(--text-ghost)"; } }}>
+                      <span className="material-symbols-outlined" style={{ fontSize: 13 }}>{editingLocation ? "check" : "edit_location_alt"}</span>
+                      {editingLocation ? "Done" : "Edit"}
+                    </button>
+                  </div>
                 </div>
                 <div style={{ ...cardBodyStyle, padding: isMobile ? "16px 16px" : "20px 24px", flex: 1, display: "flex", flexDirection: "column" }}>
-                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr", gap: 12, marginBottom: editingLocation ? 10 : 16 }}>
                     <div>
                       <label style={labelStyle}>Latitude</label>
-                      <div style={{ ...inputStyle, color: "var(--text-dim)", cursor: "default", userSelect: "text" }}>{prayerSettings.latitude || "—"}</div>
+                      {editingLocation ? (
+                        <LocalInput style={inputStyle} type="number" step="0.000001" value={prayerSettings.latitude}
+                          onCommit={v => setPrayerSettings(p => ({ ...p, latitude: v }))} placeholder="43.651070" />
+                      ) : (
+                        <div style={{ ...inputStyle, color: "var(--text-dim)", cursor: "default", userSelect: "text" }}>{prayerSettings.latitude || "-"}</div>
+                      )}
                     </div>
                     <div>
                       <label style={labelStyle}>Longitude</label>
-                      <div style={{ ...inputStyle, color: "var(--text-dim)", cursor: "default", userSelect: "text" }}>{prayerSettings.longitude || "—"}</div>
+                      {editingLocation ? (
+                        <LocalInput style={inputStyle} type="number" step="0.000001" value={prayerSettings.longitude}
+                          onCommit={v => setPrayerSettings(p => ({ ...p, longitude: v }))} placeholder="-79.347015" />
+                      ) : (
+                        <div style={{ ...inputStyle, color: "var(--text-dim)", cursor: "default", userSelect: "text" }}>{prayerSettings.longitude || "-"}</div>
+                      )}
                     </div>
                     <div style={isMobile ? { gridColumn: "1 / -1" } : undefined}>
                       <label style={labelStyle}>Timezone</label>
                       <Select value={prayerSettings.timezone} onChange={v => setPrayerSettings(p => ({ ...p, timezone: v }))} options={TIMEZONES} />
                     </div>
                   </div>
+                  {editingLocation && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12, fontFamily: "Manrope, sans-serif", fontSize: 11, color: "var(--text-ghost)" }}>
+                      <span className="material-symbols-outlined" style={{ fontSize: 14, color: "var(--accent)" }}>touch_app</span>
+                      Drag the pin or click the map to set your masjid's location.
+                    </div>
+                  )}
                   <div style={{ flex: 1, minHeight: 200 }}>
                     <LocationMap latitude={prayerSettings.latitude} longitude={prayerSettings.longitude}
-                      flyTrigger={mapFlyTrigger} readOnly autoCenter height="100%" />
+                      flyTrigger={mapFlyTrigger} readOnly={!editingLocation}
+                      onChange={(la, lo) => setPrayerSettings(p => ({ ...p, latitude: la, longitude: lo }))}
+                      autoCenter={!editingLocation} height="100%" />
                   </div>
                 </div>
               </div>
@@ -511,33 +558,56 @@ const SettingsTab: React.FC<SettingsTabProps> = ({
                               </div>
                             </div>
 
-                            {/* Edge Cases + Output */}
-                            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16 }}>
-                              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                                <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif" }}>Edge Cases</span>
-                                <div><label style={labelStyle}>High Latitude Rule</label><Select value={preset.highLatitudeRule} onChange={v => handleUpdatePreset(preset.id, { highLatitudeRule: v })} options={HIGH_LATITUDE_RULES} /></div>
-                                <div><label style={labelStyle}>Polar Circle Resolution</label><Select value={preset.polarCircleResolution} onChange={v => handleUpdatePreset(preset.id, { polarCircleResolution: v })} options={POLAR_CIRCLE_RESOLUTIONS} /></div>
-                                <div style={{ opacity: preset.method !== "MoonsightingCommittee" ? 0.4 : 1 }}>
-                                  <label style={labelStyle}>Shafaq{preset.method !== "MoonsightingCommittee" && <span style={{ marginLeft: 6, fontWeight: 400, textTransform: "none", letterSpacing: "normal", color: "var(--text-ghost)" }}>— Moonsighting only</span>}</label>
-                                  <Select value={preset.shafaq} disabled={preset.method !== "MoonsightingCommittee"} onChange={v => handleUpdatePreset(preset.id, { shafaq: v })} options={SHAFAQ_OPTIONS} />
-                                </div>
-                              </div>
-                              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                                <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif" }}>Output</span>
-                                <div><label style={labelStyle}>Time Rounding</label><Select value={preset.rounding} onChange={v => handleUpdatePreset(preset.id, { rounding: v })} options={ROUNDING_OPTIONS} /></div>
+                            {/* Advanced (Edge Cases + Output) — collapsed by default */}
+                            {(() => {
+                              const isAdvOpen = !!advancedOpen[preset.id];
+                              const adjustCount = ADJUSTMENTS.filter(({ key }) => {
+                                const v = String(preset[key] ?? "").trim();
+                                return v !== "" && v !== "0";
+                              }).length;
+                              return (
                                 <div>
-                                  <label style={labelStyle}>Minute Adjustments</label>
-                                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr", gap: 8 }}>
-                                    {ADJUSTMENTS.map(({ key, label }) => (
-                                      <div key={key}>
-                                        <label style={labelStyle}>{label}</label>
-                                        <LocalInput style={inputStyle} type="number" step="1" value={preset[key]} onCommit={v => handleUpdatePreset(preset.id, { [key]: v })} placeholder="0" />
+                                  <button
+                                    onClick={() => setAdvancedOpen(o => ({ ...o, [preset.id]: !o[preset.id] }))}
+                                    style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 0", background: "transparent", border: "none", cursor: "pointer", fontFamily: "Manrope, sans-serif", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-ghost)" }}>
+                                    <span className="material-symbols-outlined" style={{ fontSize: 15, transition: "transform 0.2s", transform: isAdvOpen ? "rotate(90deg)" : "rotate(0deg)" }}>chevron_right</span>
+                                    Advanced
+                                    {!isAdvOpen && adjustCount > 0 && (
+                                      <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.04em", color: "var(--accent)", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2, padding: "1px 6px" }}>{adjustCount} adjustment{adjustCount !== 1 ? "s" : ""}</span>
+                                    )}
+                                  </button>
+
+                                  {isAdvOpen && (
+                                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, marginTop: 12 }}>
+                                      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                                        <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif" }}>Edge Cases</span>
+                                        <div><label style={labelStyle}>High Latitude Rule</label><Select value={preset.highLatitudeRule} onChange={v => handleUpdatePreset(preset.id, { highLatitudeRule: v })} options={HIGH_LATITUDE_RULES} /></div>
+                                        <div><label style={labelStyle}>Polar Circle Resolution</label><Select value={preset.polarCircleResolution} onChange={v => handleUpdatePreset(preset.id, { polarCircleResolution: v })} options={POLAR_CIRCLE_RESOLUTIONS} /></div>
+                                        <div style={{ opacity: preset.method !== "MoonsightingCommittee" ? 0.4 : 1 }}>
+                                          <label style={labelStyle}>Shafaq{preset.method !== "MoonsightingCommittee" && <span style={{ marginLeft: 6, fontWeight: 400, textTransform: "none", letterSpacing: "normal", color: "var(--text-ghost)" }}>- Moonsighting only</span>}</label>
+                                          <Select value={preset.shafaq} disabled={preset.method !== "MoonsightingCommittee"} onChange={v => handleUpdatePreset(preset.id, { shafaq: v })} options={SHAFAQ_OPTIONS} />
+                                        </div>
                                       </div>
-                                    ))}
-                                  </div>
+                                      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                                        <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif" }}>Output</span>
+                                        <div><label style={labelStyle}>Time Rounding</label><Select value={preset.rounding} onChange={v => handleUpdatePreset(preset.id, { rounding: v })} options={ROUNDING_OPTIONS} /></div>
+                                        <div>
+                                          <label style={labelStyle}>Minute Adjustments</label>
+                                          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr", gap: 8 }}>
+                                            {ADJUSTMENTS.map(({ key, label }) => (
+                                              <div key={key}>
+                                                <label style={labelStyle}>{label}</label>
+                                                <LocalInput style={inputStyle} type="number" step="1" value={preset[key]} onCommit={v => handleUpdatePreset(preset.id, { [key]: v })} placeholder="0" />
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
-                              </div>
-                            </div>
+                              );
+                            })()}
 
                           </div>
                         );
@@ -549,6 +619,12 @@ const SettingsTab: React.FC<SettingsTabProps> = ({
               );
             })()}
 
+
+          </section>
+
+          {/* ── Data & Integrations ── */}
+          <section id="settings-data" style={sectionStyle}>
+            <SectionHeading label="Data & Integrations" />
 
           {/* ── Public Data Feed ── */}
           {(() => {
@@ -731,12 +807,17 @@ const SettingsTab: React.FC<SettingsTabProps> = ({
               </Card>
             );
           })()}
+          </section>
 
-          {/* ── Retake Setup Wizard ── */}
-          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          {/* ── Page footer: re-run onboarding ── */}
+          <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "flex-start" : "center", justifyContent: "space-between", gap: 12, marginTop: 8, paddingTop: 20, borderTop: "1px solid var(--outline-subtle)" }}>
+            <div>
+              <div style={{ fontFamily: "Manrope, sans-serif", fontSize: 13, fontWeight: 700, color: "var(--on-surface)" }}>Setup Wizard</div>
+              <div style={{ fontFamily: "Manrope, sans-serif", fontSize: 12, color: "var(--text-dim)", marginTop: 2 }}>Walk through the guided setup again to reconfigure your masjid from scratch.</div>
+            </div>
             <button
               onClick={() => navigate("/onboarding")}
-              style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, fontFamily: "Manrope, sans-serif", fontSize: 12, fontWeight: 700, color: "var(--text-ghost)", cursor: "pointer", transition: "border-color 0.15s, color 0.15s" }}
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, fontFamily: "Manrope, sans-serif", fontSize: 12, fontWeight: 700, color: "var(--text-ghost)", cursor: "pointer", transition: "border-color 0.15s, color 0.15s", flexShrink: 0 }}
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--outline)"; (e.currentTarget as HTMLElement).style.color = "var(--on-surface)"; }}
               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--outline-variant)"; (e.currentTarget as HTMLElement).style.color = "var(--text-ghost)"; }}>
               <span className="material-symbols-outlined" style={{ fontSize: 14 }}>replay</span>
