@@ -42,10 +42,13 @@ not imported anywhere in `src/` and not part of the build.
 - **Dashboard** (`src/dashboard/`, driven by `HomePage.tsx`): tabs live in
   `src/dashboard/tabs/` (`OverviewTab`, `PrayerTimesTab`, `EventsTab`,
   `SettingsTab`) and are switched via the `:tab` route param, not local state.
-  Shared reusable widgets (custom `Select`, `DatePicker`, `LocationMap`,
-  `BatchControl`) live in `src/dashboard/components/`. Per-tab UI state
-  (active tab, dark mode, tutorial-seen flags, theme) is persisted to
-  `localStorage`, not the database.
+  The route supports five tab values (`overview`, `prayer-times`, `events`,
+  `announcements`, `settings`); `announcements` renders `EventsTab` with its
+  `eventsSubTab` prop rather than a separate component file. Shared reusable
+  widgets (custom `Select`, `DatePicker`, `LocationMap`, `BatchControl`,
+  `Toast`) live in `src/dashboard/components/`. Per-tab UI state (active tab,
+  dark mode, tutorial-seen flags, theme) is persisted to `localStorage`, not
+  the database.
 - **Prayer time calculation has two independent implementations** — know
   which one you're editing:
   - `src/lib/prayerTimes.ts`: a from-scratch TS port of the PrayTimes.org
@@ -71,8 +74,10 @@ not imported anywhere in `src/` and not part of the build.
   (depth comes only from stepping up the `surface-container-*` scale), and
   the only expressive color is the active accent theme — don't introduce new
   colors outside the surface/accent/error scales.
-- `.env` is committed to git with empty placeholder values (cleared
-  intentionally, see git history) — never fill in real secrets there or
-  commit real Supabase keys.
+- `.env` is gitignored; `.env.example` is the committed template — copy it to
+  `.env` and fill in real Supabase keys locally, never commit `.env` itself.
+- User-facing feedback in the dashboard uses the shared `Toast` component
+  (`showToast`), not `alert()`. `confirm()` is still used for destructive
+  action confirmations (delete event/announcement).
 - TypeScript is strict (`strict`, `noUnusedLocals`, `noUnusedParameters` all
   on in `tsconfig.app.json`) — unused imports/vars will fail `npm run build`.
