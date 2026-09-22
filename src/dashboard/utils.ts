@@ -15,7 +15,10 @@ export function to12h(timeStr: string): string {
   return timeStr;
 }
 
-export function formatTimeInput(val: string): string {
+// `defaultPeriod` decides AM vs PM when the input is ambiguous (e.g. "1:15" with
+// no am/pm and hour 1–11). Callers that know the prayer pass "PM" for
+// afternoon/evening prayers so "1:15" for Dhuhr becomes 1:15 PM, not 1:15 AM.
+export function formatTimeInput(val: string, defaultPeriod?: "AM" | "PM"): string {
   const clean = val.trim();
   if (!clean) return "";
   // Already "h:mm AM/PM"
@@ -34,7 +37,8 @@ export function formatTimeInput(val: string): string {
   const m24 = clean.match(/^(\d{1,2}):(\d{2})$/);
   if (m24) {
     const h = parseInt(m24[1]); const m = m24[2];
-    const period = h >= 12 ? "PM" : "AM";
+    // Hours 1–11 are ambiguous — honour the caller's default when given.
+    const period = h === 0 ? "AM" : h === 12 ? "PM" : h > 12 ? "PM" : (defaultPeriod ?? "AM");
     const dh = h === 0 ? 12 : h > 12 ? h - 12 : h;
     return `${dh}:${m} ${period}`;
   }
@@ -43,11 +47,26 @@ export function formatTimeInput(val: string): string {
   if (mCompact) {
     const s = mCompact[1].padStart(4, "0");
     const h = parseInt(s.slice(0, 2)); const m = s.slice(2);
-    const period = h >= 12 ? "PM" : "AM";
+    const period = h === 0 ? "AM" : h === 12 ? "PM" : h > 12 ? "PM" : (defaultPeriod ?? "AM");
     const dh = h === 0 ? 12 : h > 12 ? h - 12 : h;
     return `${dh}:${m} ${period}`;
   }
+  // Bare hour "3" or "13" → top of the hour ("3:00 PM" for a PM-default prayer).
+  const mHour = clean.match(/^(\d{1,2})$/);
+  if (mHour) {
+    const h = parseInt(mHour[1]);
+    if (h >= 0 && h <= 23) {
+      const period = h === 0 ? "AM" : h === 12 ? "PM" : h > 12 ? "PM" : (defaultPeriod ?? "AM");
+      const dh = h === 0 ? 12 : h > 12 ? h - 12 : h;
+      return `${dh}:00 ${period}`;
+    }
+  }
   return val;
+}
+
+// Fajr and Sunrise are morning; every other prayer defaults to PM.
+export function periodForPrayer(prayer: string): "AM" | "PM" {
+  return prayer === "fajr" || prayer === "sunrise" ? "AM" : "PM";
 }
 
 export function addMinsToTime(timeStr: string, mins: number): string {

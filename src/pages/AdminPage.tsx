@@ -81,6 +81,15 @@ const btnGhost: React.CSSProperties = {
   color: "var(--on-surface-variant)", cursor: "pointer",
 };
 
+// Readable temp password: two short letter groups + digits, no ambiguous chars.
+const generateTempPassword = (): string => {
+  const chars = "abcdefghjkmnpqrstuvwxyz";
+  const nums = "23456789";
+  const pick = (set: string, n: number) =>
+    Array.from({ length: n }, () => set[Math.floor(Math.random() * set.length)]).join("");
+  return `${pick(chars, 4)}-${pick(nums, 4)}`;
+};
+
 const CrescentIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
     <path d="M21.64 13a1 1 0 00-1.05-.14 8.05 8.05 0 01-3.37.73 8.15 8.15 0 01-8.14-8.1 8.59 8.59 0 01.25-2A1 1 0 008 2.36a10.14 10.14 0 1014 11.69 1 1 0 00-.36-.95z" />
@@ -198,6 +207,10 @@ const AdminPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
+  // Credentials from the most recent approval — shown in a persistent panel (not a
+  // transient toast) because the temp password is random and shown only once.
+  const [approvedCreds, setApprovedCreds] = useState<{ name: string; email: string; password: string } | null>(null);
+  const [credsCopied, setCredsCopied] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; type: "masjid" | "registration" } | null>(null);
@@ -226,10 +239,18 @@ const AdminPage: React.FC = () => {
   useEffect(() => { loadData(); }, []);
 
   const handleApprove = async (reg: Registration) => {
+    // Guard: never try to create an auth user for an unusable email.
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((reg.masjid_email ?? "").trim())) {
+      showToast(`Can't approve — "${reg.masjid_email || "no email"}" is not a valid email address.`, "error");
+      return;
+    }
     setActionLoading(reg.id);
     try {
+      // Unique temporary password per masjid (shown to the admin to relay once).
+      // The masjid changes it via "Forgot password?" on the login page.
+      const tempPassword = generateTempPassword();
       const { data: userData, error: userError } = await supabaseAdmin.auth.admin.createUser({
-        email: reg.masjid_email, password: "12345", email_confirm: true,
+        email: reg.masjid_email, password: tempPassword, email_confirm: true,
       });
       if (userError) throw new Error(userError.message);
       const { error: masjidError } = await supabaseAdmin.from("masjids").insert({
@@ -240,7 +261,10 @@ const AdminPage: React.FC = () => {
       });
       if (masjidError) throw new Error(masjidError.message);
       await supabaseAdmin.from("masjid_registrations").update({ status: "approved" }).eq("id", reg.id);
-      showToast(`${reg.masjid_name} approved! Login: ${reg.masjid_email} / 12345`);
+      // Persist the one-time credentials on screen until the admin dismisses them —
+      // a 3.5s toast would lose the only copy of the random password.
+      setApprovedCreds({ name: reg.masjid_name, email: reg.masjid_email, password: tempPassword });
+      setCredsCopied(false);
       loadData();
     } catch (err: unknown) {
       showToast((err as Error).message, "error");
@@ -319,6 +343,48 @@ const AdminPage: React.FC = () => {
           boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
         }}>
           {toast.msg}
+        </div>
+      )}
+
+      {/* Approval credentials — persistent until dismissed */}
+      {approvedCreds && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.7)", backdropFilter: "blur(2px)" }}
+          onClick={() => setApprovedCreds(null)}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ width: 420, maxWidth: "90vw", background: "var(--surface)", border: "1px solid var(--accent-border)", borderRadius: 4, fontFamily: F, overflow: "hidden" }}>
+            <div style={{ padding: "18px 22px", borderBottom: "1px solid var(--surface-high)" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--accent)", marginBottom: 4 }}>Masjid Approved</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: "var(--on-surface)", letterSpacing: "-0.02em" }}>{approvedCreds.name}</div>
+              <p style={{ fontSize: 12, color: "var(--text-ghost)", margin: "6px 0 0", lineHeight: 1.5 }}>
+                Send these sign-in details to the masjid. This password is shown <strong>only once</strong> — they can change it via “Forgot password?” after logging in.
+              </p>
+            </div>
+            <div style={{ padding: "18px 22px", display: "flex", flexDirection: "column", gap: 12 }}>
+              {([{ label: "Email", value: approvedCreds.email }, { label: "Temporary Password", value: approvedCreds.password }] as const).map(f => (
+                <div key={f.label}>
+                  <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", marginBottom: 4 }}>{f.label}</div>
+                  <div style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: "var(--on-surface)", background: "var(--surface-low)", border: "1px solid var(--surface-high)", borderRadius: 2, padding: "9px 12px", userSelect: "all", wordBreak: "break-all" }}>{f.value}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ padding: "14px 22px", borderTop: "1px solid var(--surface-high)", display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(`Email: ${approvedCreds.email}\nTemporary password: ${approvedCreds.password}`);
+                    setCredsCopied(true);
+                  } catch { setCredsCopied(false); }
+                }}
+                style={{ padding: "8px 16px", borderRadius: 2, fontSize: 13, fontWeight: 700, fontFamily: F, background: "transparent", border: "1px solid var(--outline-variant)", color: "var(--on-surface-variant)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 15 }}>{credsCopied ? "check" : "content_copy"}</span>
+                {credsCopied ? "Copied" : "Copy"}
+              </button>
+              <button onClick={() => setApprovedCreds(null)}
+                style={{ padding: "8px 18px", borderRadius: 2, fontSize: 13, fontWeight: 700, fontFamily: F, background: "var(--accent)", border: "1px solid var(--accent)", color: "var(--accent-text)", cursor: "pointer" }}>
+                Done
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

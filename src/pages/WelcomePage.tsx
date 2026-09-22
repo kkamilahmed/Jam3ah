@@ -4,10 +4,11 @@ import * as XLSX from "xlsx";
 import useIsMobile from "../hooks/useIsMobile";
 import { supabase } from "../lib/supabase";
 import { generateYearPrayerTimes } from "../lib/prayerTimes";
+import ThemeToggle from "../components/ThemeToggle";
 import LocationMap from "../dashboard/components/LocationMap";
 import LocalInput from "../dashboard/components/LocalInput";
 import BatchControl from "../dashboard/components/BatchControl";
-import { formatTimeInput } from "../dashboard/utils";
+import { formatTimeInput, periodForPrayer } from "../dashboard/utils";
 import {
   CALC_METHODS as CALC_METHODS_FULL, MADHABS as MADHABS_FULL,
   HIGH_LATITUDE_RULES, POLAR_CIRCLE_RESOLUTIONS, SHAFAQ_OPTIONS,
@@ -123,19 +124,26 @@ const secondaryBtn: React.CSSProperties = {
   fontWeight: 600, fontSize: 13, cursor: "pointer",
 };
 
-// ─── Progress dots ────────────────────────────────────────────────────────────
+// ─── Progress indicator ───────────────────────────────────────────────────────
 
-function Dots({ n, i }: { n: number; i: number }) {
+// Prominent centered step indicator for the wizard nav — a labelled pill with a
+// segmented progress bar, so users always see exactly where they are.
+function StepIndicator({ n, i, label, compact }: { n: number; i: number; label: string; compact?: boolean }) {
   return (
-    <div style={{ display: "flex", gap: 5 }}>
-      {Array.from({ length: n }).map((_, k) => (
-        <div key={k} style={{
-          height: 5, borderRadius: 2,
-          width: k === i ? 24 : k < i ? 16 : 6,
-          background: k <= i ? "var(--accent)" : "var(--surface-high)",
-          transition: "width 0.25s, background 0.25s",
-        }} />
-      ))}
+    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "6px 8px 6px 14px", background: "var(--surface)", border: "1px solid var(--accent-border)", borderRadius: 2 }}>
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, boxShadow: "0 0 0 3px var(--accent-bg)" }} />
+      <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", color: "var(--on-surface)", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+        Step {i + 1} of {n}
+      </span>
+      {!compact && (<>
+        <span style={{ width: 1, height: 12, background: "var(--surface-high)" }} />
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", color: "var(--accent)", textTransform: "uppercase", whiteSpace: "nowrap" }}>{label}</span>
+      </>)}
+      <div style={{ display: "flex", gap: 4, marginLeft: 2 }}>
+        {Array.from({ length: n }).map((_, k) => (
+          <div key={k} style={{ width: k === i ? 18 : 8, height: 4, borderRadius: 2, background: k <= i ? "var(--accent)" : "var(--surface-high)", transition: "all 0.25s" }} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -207,6 +215,8 @@ export default function WelcomePage() {
   // date string "YYYY-MM-DD" → prayer → calculated start time ("HH:MM")
   const [calcTimes,        setCalcTimes]        = useState<Record<string, Record<string, string>>>({});
   const [refLoading,       setRefLoading]       = useState(false);
+  // When set, shows the "finish with empty times?" confirmation before completing.
+  const [finishGap,        setFinishGap]        = useState<{ empty: number; filled: number } | null>(null);
 
   // Excel upload (source === "excel")
   const [xlsxFile,    setXlsxFile]    = useState<File | null>(null);
@@ -330,7 +340,10 @@ export default function WelcomePage() {
     if (!presetCount) return;
     const defaultNames = ["All Year", "Winter", "Spring", "Summer", "Autumn"];
     setPresets(Array.from({ length: presetCount }, (_, i) => ({
-      id: String(i), name: defaultNames[i] ?? `Preset ${i + 1}`, months: [],
+      // A single "All Year" preset covers all 12 months by default; with multiple
+      // presets the months start empty so the masjid divides them up.
+      id: String(i), name: defaultNames[i] ?? `Preset ${i + 1}`,
+      months: presetCount === 1 ? Array.from({ length: 12 }, (_, m) => m + 1) : [],
       method: "NorthAmerica", madhab: "Shafi",
       fajrAngle: "", ishaAngle: "", ishaInterval: "", maghribAngle: "",
       highLatitudeRule: "recommended", polarCircleResolution: "AqrabBalad",
@@ -448,7 +461,34 @@ export default function WelcomePage() {
   };
 
   // ── Finish ─────────────────────────────────────────────────────────────────
+  // Count empty vs filled prayer slots across the whole year (manual/upload flow).
+  const scheduleGaps = () => {
+    const year = new Date().getFullYear();
+    let empty = 0, filled = 0;
+    for (let mo = 1; mo <= 12; mo++) {
+      const dim = new Date(year, mo, 0).getDate();
+      for (let day = 1; day <= dim; day++) {
+        for (const pr of PRAYERS) {
+          const pair = schedule[mo]?.[day]?.[pr];
+          if (pair && (pair.adhan || pair.iqama)) filled++; else empty++;
+        }
+      }
+    }
+    return { empty, filled };
+  };
+
+  // Gate for the "Complete Setup" button: warn before finishing a manual/upload
+  // schedule that's empty or has gaps (auto-calculate fills everything itself).
+  const requestFinish = () => {
+    if (source === "excel") {
+      const g = scheduleGaps();
+      if (g.filled === 0 || g.empty > 0) { setFinishGap(g); return; }
+    }
+    handleFinish();
+  };
+
   const handleFinish = async () => {
+    setFinishGap(null);
     if (!masjidId) return;
     setSaving(true);
     try {
@@ -499,21 +539,64 @@ export default function WelcomePage() {
 
   // ── Excel upload helpers ───────────────────────────────────────────────────
 
+  // Generates a correctly-columned starter spreadsheet so masjids fill in the
+  // exact headers the importer expects (avoids malformed submissions).
+  const downloadTemplate = () => {
+    const headers = [
+      "Date", "Fajr", "Dhuhr", "Asr", "Maghrib", "Isha",
+      "Fajr Iqama", "Dhuhr Iqama", "Asr Iqama", "Maghrib Iqama", "Isha Iqama",
+    ];
+    const year = new Date().getFullYear();
+    // Two sample rows so the expected formats (date + 12h times) are obvious.
+    const sample = [
+      [`${year}-01-01`, "6:15 AM", "12:30 PM", "3:00 PM", "5:05 PM", "6:35 PM",
+        "6:30 AM", "12:45 PM", "3:15 PM", "5:10 PM", "7:00 PM"],
+      [`${year}-01-02`, "6:15 AM", "12:30 PM", "3:01 PM", "5:06 PM", "6:36 PM",
+        "6:30 AM", "12:45 PM", "3:15 PM", "5:11 PM", "7:00 PM"],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...sample]);
+    ws["!cols"] = headers.map(() => ({ wch: 14 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Prayer Times");
+    XLSX.writeFile(wb, "jam3ah-prayer-times-template.xlsx");
+  };
+
+  // Normalize a header so real-world spelling/naming variants all collapse to a
+  // canonical form: "Dhur Adhan", "Zuhr Begin", "dhuhrStartTime" → "dhuhr" + start;
+  // "Magrib Jamat", "maghrib1IqamaTime" → "maghrib" + iqama. Keeps imports from
+  // silently dropping columns (the main cause of malformed uploads).
+  const normHeader = (h: string) =>
+    h.toLowerCase()
+      .replace(/zuhur|zuhr|zohr|duhr|dhur|dohr/g, "dhuhr")
+      .replace(/maghreb|magrib|magreb/g, "maghrib")
+      .replace(/azaan|azan|adhaan/g, "adhan")
+      .replace(/begin|start/g, "adhan")            // "start/begin time" == the athan/start
+      .replace(/jamaah|jamaat|jamat|jama'ah|jamah/g, "iqama")
+      .replace(/[^a-z0-9]/g, "");                  // strip spaces, digits stay (fajr1 → fajr1)
+
   const xlsxAutoMap = (headers: string[]) => {
-    const find = (kws: string[]) => headers.find(h => kws.some(k => h.toLowerCase().includes(k))) ?? "";
+    const cols = headers.map(raw => ({ raw, n: normHeader(raw) }));
+    const isIqama = (n: string) => n.includes("iqama");
+    // Pick the column for a prayer's start (wantIqama=false) or iqama (wantIqama=true).
+    const pick = (prayer: string, wantIqama: boolean) => {
+      const cands = cols.filter(c => c.n.includes(prayer));
+      const exact = cands.find(c => isIqama(c.n) === wantIqama);
+      // For a start column, fall back to the first match that isn't an iqama.
+      return (exact ?? (wantIqama ? undefined : cands.find(c => !isIqama(c.n))))?.raw ?? "";
+    };
     setXlsxColMap({
-      date:          find(["date"]),
-      day:           find(["day", "no."]),
-      fajr:          find(["fajr begin", "fajr start", "fajr adhan", "fajr azan"]) || find(["fajr"]),
-      dhuhr:         find(["dhuhr begin", "zuhr begin", "dhuhr start", "zuhr start"]) || find(["dhuhr", "zuhr"]),
-      asr:           find(["asr begin", "asr start"]) || find(["asr"]),
-      maghrib:       find(["maghrib begin", "maghrib start", "sunset"]) || find(["maghrib"]),
-      isha:          find(["isha begin", "isha start"]) || find(["isha"]),
-      fajr_iqama:    find(["fajr iqama", "fajr jamat", "fajr jamaat"]),
-      dhuhr_iqama:   find(["dhuhr iqama", "zuhr iqama", "dhuhr jamat", "zuhr jamat"]),
-      asr_iqama:     find(["asr iqama", "asr jamat"]),
-      maghrib_iqama: find(["maghrib iqama", "maghrib jamat"]),
-      isha_iqama:    find(["isha iqama", "isha jamat"]),
+      date:          cols.find(c => c.n.includes("date"))?.raw ?? "",
+      day:           cols.find(c => c.n === "day" || c.n.startsWith("dayof"))?.raw ?? "",
+      fajr:          pick("fajr", false),
+      dhuhr:         pick("dhuhr", false),
+      asr:           pick("asr", false),
+      maghrib:       pick("maghrib", false),
+      isha:          pick("isha", false),
+      fajr_iqama:    pick("fajr", true),
+      dhuhr_iqama:   pick("dhuhr", true),
+      asr_iqama:     pick("asr", true),
+      maghrib_iqama: pick("maghrib", true),
+      isha_iqama:    pick("isha", true),
     });
   };
 
@@ -533,7 +616,7 @@ export default function WelcomePage() {
           sheetRows[name] = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false }) as string[][];
         const firstSheet = wb.SheetNames[0];
         const rows = sheetRows[firstSheet];
-        const keywords = ["fajr","dhuhr","zuhr","asr","maghrib","isha","date","day"];
+        const keywords = ["fajr","dhuhr","zuhr","dhur","asr","maghrib","magrib","isha","date","day"];
         const headerIdx = rows.findIndex(r => r.some(c => keywords.some(k => String(c ?? "").toLowerCase().includes(k))));
         setXlsxPreview({ sheets: wb.SheetNames, sheetRows, selectedSheet: firstSheet, headerRowIdx: Math.max(0, headerIdx) });
         if (headerIdx >= 0) xlsxAutoMap(rows[headerIdx].map(h => String(h ?? "").trim()));
@@ -568,13 +651,16 @@ export default function WelcomePage() {
         }
         if (!dateStr) continue;
 
-        const entry: DbRow = { date: dateStr, fajr: cv(row, xlsxColMap.fajr), dhuhr: cv(row, xlsxColMap.dhuhr),
-          asr: cv(row, xlsxColMap.asr), maghrib: cv(row, xlsxColMap.maghrib), isha: cv(row, xlsxColMap.isha) };
-        if (xlsxColMap.fajr_iqama)    entry.fajr_iqama    = cv(row, xlsxColMap.fajr_iqama);
-        if (xlsxColMap.dhuhr_iqama)   entry.dhuhr_iqama   = cv(row, xlsxColMap.dhuhr_iqama);
-        if (xlsxColMap.asr_iqama)     entry.asr_iqama     = cv(row, xlsxColMap.asr_iqama);
-        if (xlsxColMap.maghrib_iqama) entry.maghrib_iqama = cv(row, xlsxColMap.maghrib_iqama);
-        if (xlsxColMap.isha_iqama)    entry.isha_iqama    = cv(row, xlsxColMap.isha_iqama);
+        // Normalize each time to "h:mm AM/PM" so mixed inputs ("3:53 am", "1:16 pm",
+        // "18:05") all land in one consistent format the rest of the app expects.
+        const tv = (col: string, prayer: string) => { const v = cv(row, col); return v ? formatTimeInput(v, periodForPrayer(prayer)) : ""; };
+        const entry: DbRow = { date: dateStr, fajr: tv(xlsxColMap.fajr, "fajr"), dhuhr: tv(xlsxColMap.dhuhr, "dhuhr"),
+          asr: tv(xlsxColMap.asr, "asr"), maghrib: tv(xlsxColMap.maghrib, "maghrib"), isha: tv(xlsxColMap.isha, "isha") };
+        if (xlsxColMap.fajr_iqama)    entry.fajr_iqama    = tv(xlsxColMap.fajr_iqama, "fajr");
+        if (xlsxColMap.dhuhr_iqama)   entry.dhuhr_iqama   = tv(xlsxColMap.dhuhr_iqama, "dhuhr");
+        if (xlsxColMap.asr_iqama)     entry.asr_iqama     = tv(xlsxColMap.asr_iqama, "asr");
+        if (xlsxColMap.maghrib_iqama) entry.maghrib_iqama = tv(xlsxColMap.maghrib_iqama, "maghrib");
+        if (xlsxColMap.isha_iqama)    entry.isha_iqama    = tv(xlsxColMap.isha_iqama, "isha");
         parsed.push(entry);
       }
 
@@ -621,6 +707,10 @@ export default function WelcomePage() {
   const dotIdx    = source === "excel"
     ? (step <= 1 ? step : 2)
     : Math.min(step, 5);
+  const stepLabels = source === "excel"
+    ? ["Welcome", "Source", "Schedule"]
+    : ["Welcome", "Source", "Location", "Presets", "Configure", "Schedule"];
+  const stepLabel = stepLabels[dotIdx] ?? "Setup";
 
   // ── Completion ─────────────────────────────────────────────────────────────
   if (done) {
@@ -650,14 +740,17 @@ export default function WelcomePage() {
     <div style={{ minHeight: "100vh", backgroundColor: "var(--bg)", color: "var(--on-surface)", fontFamily: F, display: "flex", flexDirection: "column" }}>
 
       {/* Nav */}
-      <nav style={{ background: "var(--nav-bg)", backdropFilter: "blur(20px)", borderBottom: "1px solid var(--surface-high)", padding: "0 24px", height: 60, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <nav style={{ background: "var(--nav-bg)", backdropFilter: "blur(20px)", borderBottom: "1px solid var(--surface-high)", padding: "0 24px", height: 60, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flex: isMobile ? "0 0 auto" : "1 1 0" }}>
           <div style={{ width: 28, height: 28, background: "var(--surface-high)", border: "1px solid var(--outline)", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <span className="material-symbols-outlined" style={{ fontSize: 15, color: "var(--on-surface)" }}>mosque</span>
           </div>
-          <span style={{ fontWeight: 700, fontSize: 15, color: "var(--on-surface)" }}>jam3ah</span>
+          {!isMobile && <span style={{ fontWeight: 700, fontSize: 15, color: "var(--on-surface)" }}>jam3ah</span>}
         </div>
-        <Dots n={totalDots} i={dotIdx} />
+        <StepIndicator n={totalDots} i={dotIdx} label={stepLabel} compact={isMobile} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 16, flex: isMobile ? "0 0 auto" : "1 1 0" }}>
+          <ThemeToggle />
+        </div>
       </nav>
 
       {/* Content */}
@@ -709,7 +802,7 @@ export default function WelcomePage() {
             <div>
               <div style={{ marginBottom: 24 }}>
                 <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2, fontSize: 11, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 14 }}>
-                  Step 1 of {source === "excel" ? 3 : 6}
+                  Step {dotIdx + 1} of {totalDots}
                 </div>
                 <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.03em", color: "var(--on-surface)", margin: "0 0 6px" }}>Prayer Times Source</h1>
                 <p style={{ fontSize: 14, color: "var(--text-ghost)", margin: 0 }}>How would you like prayer start times to be managed?</p>
@@ -718,8 +811,8 @@ export default function WelcomePage() {
               <div style={{ background: "var(--surface)", border: "1px solid var(--surface-high)", borderRadius: 2, padding: 24 }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
                   {([
-                    { val: "auto",  label: "Auto-Calculate", desc: "We compute times from your location using an Islamic calculation method.", icon: "calculate" },
-                    { val: "excel", label: "Upload Excel",   desc: "Upload your own schedule spreadsheet from the Prayer Times tab later.",     icon: "upload_file" },
+                    { val: "auto",  label: "Auto-Calculate", desc: "We calculate prayer start times from your location using an Islamic method. Next: set your location, pick calculation presets, and assign them to months — no typing times by hand.", icon: "calculate" },
+                    { val: "excel", label: "Fill Manually",  desc: "Enter each day's adhan & iqama times yourself, or import them from a spreadsheet. Next: a month-by-month schedule builder, plus an optional Excel upload with a downloadable template.", icon: "edit_calendar" },
                   ] as const).map(o => (
                     <button key={o.val} onClick={() => setSource(o.val)}
                       style={{ display: "flex", alignItems: "flex-start", gap: 14, padding: "16px", borderRadius: 2, border: source === o.val ? "1px solid var(--accent-border)" : "1px solid var(--surface-high)", background: source === o.val ? "var(--accent-bg)" : "var(--surface-low)", textAlign: "left", cursor: "pointer", transition: "all 0.15s" }}>
@@ -752,7 +845,7 @@ export default function WelcomePage() {
             <div>
               <div style={{ marginBottom: 24 }}>
                 <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2, fontSize: 11, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 14 }}>
-                  Step 2 of 6
+                  Step {dotIdx + 1} of {totalDots}
                 </div>
                 <h1 style={{ fontSize: isMobile ? 20 : 24, fontWeight: 800, letterSpacing: "-0.03em", color: "var(--on-surface)", margin: "0 0 6px" }}>Location & Timezone</h1>
                 <p style={{ fontSize: isMobile ? 13 : 14, color: "var(--text-ghost)", margin: 0 }}>Enter your masjid's address — used to calculate accurate prayer times.</p>
@@ -873,7 +966,7 @@ export default function WelcomePage() {
             <div>
               <div style={{ marginBottom: 24 }}>
                 <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2, fontSize: 11, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 14 }}>
-                  Step 3 of 6
+                  Step {dotIdx + 1} of {totalDots}
                 </div>
                 <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.03em", color: "var(--on-surface)", margin: "0 0 6px" }}>Calculation Presets</h1>
                 <p style={{ fontSize: 14, color: "var(--text-ghost)", margin: 0 }}>How many different calculation setups do you need? Most masjids use 1–2.</p>
@@ -920,7 +1013,7 @@ export default function WelcomePage() {
             <div>
               <div style={{ marginBottom: 24 }}>
                 <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2, fontSize: 11, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 14 }}>
-                  Step 4 of 6
+                  Step {dotIdx + 1} of {totalDots}
                 </div>
                 <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.03em", color: "var(--on-surface)", margin: "0 0 6px" }}>Configure Presets</h1>
                 <p style={{ fontSize: 14, color: "var(--text-ghost)", margin: 0 }}>Set calculation settings for each preset and assign months. All 12 months must be covered.</p>
@@ -974,7 +1067,22 @@ export default function WelcomePage() {
                             onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
                         </div>
                         <div>
-                          <label style={labelStyle}>Assign Months</label>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
+                            <label style={{ ...labelStyle, marginBottom: 0 }}>Assign Months</label>
+                            <button
+                              onClick={() => {
+                                const allOwned = p.months.length === 12;
+                                setPresets(ps => ps.map(pr =>
+                                  pr.id === p.id
+                                    ? { ...pr, months: allOwned ? [] : Array.from({ length: 12 }, (_, m) => m + 1) }
+                                    // Selecting all for this preset claims every month, so clear the others.
+                                    : { ...pr, months: allOwned ? pr.months : [] }
+                                ));
+                              }}
+                              style={{ background: "none", border: "none", padding: 0, fontFamily: F, fontSize: 11, fontWeight: 700, color: "var(--accent)", cursor: "pointer" }}>
+                              {p.months.length === 12 ? "Clear all" : "Select all"}
+                            </button>
+                          </div>
                           <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: isMobile ? 4 : 7 }}>
                             {MONTHS.map((name, i) => {
                               const mo    = i + 1;
@@ -1057,6 +1165,9 @@ export default function WelcomePage() {
                       {/* Output */}
                       <div>
                         <SectionTitle>Output</SectionTitle>
+                        <p style={{ margin: "-6px 0 14px", fontSize: 11, color: "var(--text-ghost)", fontFamily: F, lineHeight: 1.5 }}>
+                          Fine-tune the calculated times. Each field shifts that prayer's start by a number of minutes (e.g. <strong>2</strong> = 2 min later, <strong>-3</strong> = 3 min earlier). Leave at 0 to use the method's value. <strong>Rounding</strong> snaps every result to the nearest minute setting.
+                        </p>
                         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(3, 1fr)" : "repeat(6, 1fr)", gap: 10 }}>
                             {([
@@ -1203,7 +1314,7 @@ export default function WelcomePage() {
 
                 <div style={{ marginBottom: 24 }}>
                   <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2, fontSize: 11, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 14 }}>
-                    {source === "excel" ? "Step 2 of 3" : "Step 5 of 6"}
+                    Step {dotIdx + 1} of {totalDots}
                   </div>
                   <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.03em", color: "var(--on-surface)", margin: "0 0 6px" }}>
                     {source === "excel" ? "Upload Prayer Schedule" : "Prayer Schedule Builder"}
@@ -1225,6 +1336,17 @@ export default function WelcomePage() {
                   {source === "excel" && (
                     <div style={{ marginBottom: 20 }}>
                       <input type="file" accept=".xlsx,.xls" onChange={handleXlsxFile} id="xlsxUploadOnboarding" style={{ display: "none" }} />
+                      {/* Template helper — keeps submissions in the format the importer expects */}
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 12, padding: "10px 14px", background: "var(--surface-mid)", border: "1px solid var(--surface-high)", borderRadius: 2 }}>
+                        <span style={{ fontSize: 12, color: "var(--text-ghost)", fontWeight: 500 }}>
+                          Not sure of the format? Start from our template — fill in your times and upload it back.
+                        </span>
+                        <button onClick={downloadTemplate}
+                          style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 2, fontSize: 12, fontWeight: 700, fontFamily: F, border: "1px solid var(--accent-border)", color: "var(--accent)", background: "var(--accent-bg)", cursor: "pointer", flexShrink: 0 }}>
+                          <span className="material-symbols-outlined" style={{ fontSize: 15 }}>download</span>
+                          Download template
+                        </button>
+                      </div>
                       {xlsxSuccess ? (
                         /* Success state */
                         <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "16px 20px", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2 }}>
@@ -1265,19 +1387,21 @@ export default function WelcomePage() {
                           <span className="material-symbols-outlined" style={{ fontSize: 16, color: "var(--accent)", transition: "transform 0.2s", transform: batchOpen ? "rotate(90deg)" : "none", flexShrink: 0 }}>chevron_right</span>
                           <div>
                             <h2 style={{ fontSize: 14, fontWeight: 800, color: "var(--on-surface)", margin: 0, letterSpacing: "-0.02em" }}>Prayer Schedule Builder</h2>
-                            <p style={{ fontSize: 12, color: "var(--text-ghost)", fontWeight: 400, margin: "3px 0 0" }}>Set fixed times or offsets per prayer, then apply to a day range</p>
+                            <p style={{ fontSize: 12, color: "var(--text-ghost)", fontWeight: 400, margin: "3px 0 0", maxWidth: 620, lineHeight: 1.5 }}>
+                              For each prayer pick <strong>Fixed</strong> (same clock time every day) or <strong>Offset</strong> (minutes after the {source === "auto" ? "calculated start time" : "start time you entered"}), choose a day range in <strong>{MONTHS[activeMo - 1]}</strong> below, then <strong>Apply</strong>. Repeat per month using the month selector to build the full year.
+                            </p>
                           </div>
                         </div>
                         {batchOpen && !isMobile && (
                           <div onClick={e => e.stopPropagation()} style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                             <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                              <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--accent)" }}>From</span>
+                              <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--accent)" }}>From · {MONTHS[activeMo - 1]}</span>
                               <input type="number" min={1} max={daysInMonth} value={batchFromDay}
                                 onChange={e => setBatchFromDay(Math.max(1, parseInt(e.target.value) || 1))}
                                 style={{ ...inputStyle, width: 64, textAlign: "center", padding: "6px 8px", fontSize: 13 }} />
                             </div>
                             <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                              <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--accent)" }}>To</span>
+                              <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--accent)" }}>To · {MONTHS[activeMo - 1]}</span>
                               <input type="number" min={1} max={daysInMonth} value={batchToDay}
                                 onChange={e => setBatchToDay(Math.min(daysInMonth, parseInt(e.target.value) || daysInMonth))}
                                 style={{ ...inputStyle, width: 64, textAlign: "center", padding: "6px 8px", fontSize: 13 }} />
@@ -1298,13 +1422,13 @@ export default function WelcomePage() {
                       {batchOpen && isMobile && (
                         <div onClick={e => e.stopPropagation()} style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                            <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--accent)" }}>From Day</span>
+                            <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--accent)" }}>From · {MONTHS[activeMo - 1]}</span>
                             <input type="number" min={1} max={daysInMonth} value={batchFromDay}
                               onChange={e => setBatchFromDay(Math.max(1, parseInt(e.target.value) || 1))}
                               style={{ ...inputStyle, textAlign: "center", padding: "8px", fontSize: 13 }} />
                           </div>
                           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                            <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--accent)" }}>To Day</span>
+                            <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--accent)" }}>To · {MONTHS[activeMo - 1]}</span>
                             <input type="number" min={1} max={daysInMonth} value={batchToDay}
                               onChange={e => setBatchToDay(Math.min(daysInMonth, parseInt(e.target.value) || daysInMonth))}
                               style={{ ...inputStyle, textAlign: "center", padding: "8px", fontSize: 13 }} />
@@ -1332,14 +1456,14 @@ export default function WelcomePage() {
                                   <BatchControl
                                     cell={(batchAdhan as unknown as Record<string, BatchCell>)[pr]}
                                     onUpdate={patch => setBatchAdhan(prev => ({ ...prev, [pr]: { ...(prev as unknown as Record<string, BatchCell>)[pr], ...patch } }))}
-                                    placeholder="6:00 AM" accentBg="" accent="" />
+                                    placeholder="6:00 AM" defaultPeriod={periodForPrayer(pr)} allowOffset={source === "auto"} offsetHint="Minutes after the calculated start time" accentBg="" accent="" />
                                 </div>
                                 <div style={{ padding: "10px 12px" }}>
                                   <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--accent)", marginBottom: 6 }}>Iqama</div>
                                   <BatchControl
                                     cell={(batchIqama as unknown as Record<string, BatchCell>)[pr]}
                                     onUpdate={patch => setBatchIqama(prev => ({ ...prev, [pr]: { ...(prev as unknown as Record<string, BatchCell>)[pr], ...patch } }))}
-                                    placeholder="6:20 AM" accentBg="" accent="" />
+                                    placeholder="6:20 AM" defaultPeriod={periodForPrayer(pr)} offsetHint="Minutes after the adhan time" accentBg="" accent="" />
                                 </div>
                               </div>
                             </div>
@@ -1368,7 +1492,7 @@ export default function WelcomePage() {
                               <BatchControl
                                 cell={(batchAdhan as unknown as Record<string, BatchCell>)[pr]}
                                 onUpdate={patch => setBatchAdhan(prev => ({ ...prev, [pr]: { ...(prev as unknown as Record<string, BatchCell>)[pr], ...patch } }))}
-                                placeholder="6:00 AM" accentBg="" accent="" />
+                                placeholder="6:00 AM" defaultPeriod={periodForPrayer(pr)} allowOffset={source === "auto"} offsetHint="Minutes after the calculated start time" accentBg="" accent="" />
                             </div>
                           ))}
                         </div>
@@ -1383,7 +1507,7 @@ export default function WelcomePage() {
                               <BatchControl
                                 cell={(batchIqama as unknown as Record<string, BatchCell>)[pr]}
                                 onUpdate={patch => setBatchIqama(prev => ({ ...prev, [pr]: { ...(prev as unknown as Record<string, BatchCell>)[pr], ...patch } }))}
-                                placeholder="6:20 AM" accentBg="" accent="" />
+                                placeholder="6:20 AM" defaultPeriod={periodForPrayer(pr)} offsetHint="Minutes after the adhan time" accentBg="" accent="" />
                             </div>
                           ))}
                         </div>
@@ -1412,7 +1536,7 @@ export default function WelcomePage() {
                           <div style={{ background: "var(--surface-mid)", border: "1px solid var(--outline-variant)", borderRadius: 2, padding: 10 }}>
                             <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--accent)", marginBottom: 6 }}>Iqama Time</div>
                             <LocalInput value={weekendIshaIqama}
-                              onCommit={v => setWeekendIshaIqama(formatTimeInput(v))}
+                              onCommit={v => setWeekendIshaIqama(formatTimeInput(v, "PM"))}
                               placeholder="10:00 PM"
                               style={{ width: "100%", background: "transparent", border: "none", outline: "none", fontSize: 15, fontWeight: 800, color: "var(--on-surface)", fontFamily: F } as React.CSSProperties} />
                           </div>
@@ -1451,7 +1575,7 @@ export default function WelcomePage() {
                             <div key={n} style={{ flex: 1, background: "var(--surface-mid)", border: "1px solid var(--outline-variant)", borderRadius: 2, padding: "10px 12px" }}>
                               <span style={{ display: "block", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--accent)", marginBottom: 6 }}>Khutbah {n}</span>
                               <LocalInput value={jummahTimes[key]}
-                                onCommit={v => setJummahTimes(t => ({ ...t, [key]: formatTimeInput(v) }))}
+                                onCommit={v => setJummahTimes(t => ({ ...t, [key]: formatTimeInput(v, "PM") }))}
                                 placeholder="1:15 PM"
                                 style={{ width: "100%", background: "transparent", border: "none", outline: "none", fontSize: 15, fontWeight: 800, color: "var(--on-surface)", fontFamily: F } as React.CSSProperties} />
                             </div>
@@ -1535,12 +1659,12 @@ export default function WelcomePage() {
                                     {showCalc && <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-ghost)", textAlign: "center" }}>{start || "—"}</span>}
                                     <div style={{ textAlign: "center" }}>
                                       <LocalInput value={pair.adhan}
-                                        onCommit={v => setDayTime(activeMo, day, pr, "adhan", formatTimeInput(v))}
+                                        onCommit={v => setDayTime(activeMo, day, pr, "adhan", formatTimeInput(v, periodForPrayer(pr)))}
                                         placeholder="—" style={{ ...cellInp, textAlign: "center" }} />
                                     </div>
                                     <div style={{ textAlign: "center" }}>
                                       <LocalInput value={pair.iqama}
-                                        onCommit={v => setDayTime(activeMo, day, pr, "iqama", formatTimeInput(v))}
+                                        onCommit={v => setDayTime(activeMo, day, pr, "iqama", formatTimeInput(v, periodForPrayer(pr)))}
                                         placeholder="—" style={{ ...cellInp, textAlign: "center", fontWeight: 700 }} />
                                     </div>
                                   </div>
@@ -1554,7 +1678,7 @@ export default function WelcomePage() {
                                   <div style={{ textAlign: "center" }}>
                                     <LocalInput
                                       value={(schedule[activeMo][day] as unknown as Record<string, PrayerPair>)?.[`jummah_${j + 1}`]?.adhan ?? ""}
-                                      onCommit={v => setDayTime(activeMo, day, `jummah_${j + 1}`, "adhan", formatTimeInput(v))}
+                                      onCommit={v => setDayTime(activeMo, day, `jummah_${j + 1}`, "adhan", formatTimeInput(v, "PM"))}
                                       placeholder="—" style={{ ...cellInp, textAlign: "center", color: "var(--accent)", fontWeight: 700 }} />
                                   </div>
                                   <div />
@@ -1645,12 +1769,12 @@ export default function WelcomePage() {
                                       )}
                                       <td style={{ padding: "2px 4px", borderLeft: "1px solid var(--surface-high)" }}>
                                         <LocalInput value={pair.adhan}
-                                          onCommit={v => setDayTime(activeMo, day, pr, "adhan", formatTimeInput(v))}
+                                          onCommit={v => setDayTime(activeMo, day, pr, "adhan", formatTimeInput(v, periodForPrayer(pr)))}
                                           placeholder="—" style={cellInp} />
                                       </td>
                                       <td style={{ padding: "2px 4px", borderLeft: "1px solid var(--surface-high)" }}>
                                         <LocalInput value={pair.iqama}
-                                          onCommit={v => setDayTime(activeMo, day, pr, "iqama", formatTimeInput(v))}
+                                          onCommit={v => setDayTime(activeMo, day, pr, "iqama", formatTimeInput(v, periodForPrayer(pr)))}
                                           placeholder="—" style={{ ...cellInp, fontWeight: 700 }} />
                                       </td>
                                     </React.Fragment>
@@ -1661,7 +1785,7 @@ export default function WelcomePage() {
                                     {isFriday ? (
                                       <LocalInput
                                         value={(schedule[activeMo][day] as unknown as Record<string, PrayerPair>)?.[`jummah_${j + 1}`]?.adhan ?? ""}
-                                        onCommit={v => setDayTime(activeMo, day, `jummah_${j + 1}`, "adhan", formatTimeInput(v))}
+                                        onCommit={v => setDayTime(activeMo, day, `jummah_${j + 1}`, "adhan", formatTimeInput(v, "PM"))}
                                         placeholder="—" style={{ ...cellInp, color: "var(--accent)", fontWeight: 700 }} />
                                     ) : null}
                                   </td>
@@ -1679,7 +1803,7 @@ export default function WelcomePage() {
 
                   <div style={{ display: "flex", gap: 10 }}>
                     <button onClick={goBack} style={secondaryBtn}>Back</button>
-                    <button onClick={handleFinish} disabled={saving}
+                    <button onClick={requestFinish} disabled={saving}
                       style={{ ...primaryBtn, flex: 1, width: "auto", opacity: saving ? 0.6 : 1, cursor: saving ? "not-allowed" : "pointer" }}
                       onMouseEnter={e => { if (!saving) (e.currentTarget as HTMLElement).style.background = "var(--accent-light)"; }}
                       onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "var(--accent)"; }}>
@@ -1705,6 +1829,43 @@ export default function WelcomePage() {
           </button>
         </div>
       )}
+
+      {/* ── Finish-with-gaps confirmation ── */}
+      {finishGap && (() => {
+        const noneAdded = finishGap.filled === 0;
+        return (
+          <div style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.7)", backdropFilter: "blur(2px)", padding: 16 }}
+            onClick={() => setFinishGap(null)}>
+            <div onClick={e => e.stopPropagation()}
+              style={{ background: "var(--surface)", border: "1px solid var(--outline)", borderRadius: 4, width: 440, maxWidth: "90vw", overflow: "hidden", fontFamily: F }}>
+              <div style={{ padding: "18px 22px", borderBottom: "1px solid var(--surface-high)", display: "flex", alignItems: "flex-start", gap: 12 }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 22, color: "rgba(234,179,8,0.9)", flexShrink: 0 }}>warning</span>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: "var(--on-surface)", letterSpacing: "-0.02em" }}>
+                    {noneAdded ? "No schedule added yet" : "Some prayer times are empty"}
+                  </div>
+                  <p style={{ fontSize: 13, color: "var(--text-ghost)", margin: "6px 0 0", lineHeight: 1.55 }}>
+                    {noneAdded
+                      ? <>You haven't uploaded a spreadsheet or entered any times, so your screens will show no prayer times. Upload your schedule with the <strong>Download template</strong> / upload box above, or fill the builder below — you can also do this later from the Prayer Times tab.</>
+                      : <><strong>{finishGap.empty.toLocaleString()}</strong> of {(finishGap.empty + finishGap.filled).toLocaleString()} prayer slots this year still have no time. You can finish now and fill the rest later from the Prayer Times tab.</>
+                    }
+                  </p>
+                </div>
+              </div>
+              <div style={{ padding: "14px 22px", display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button onClick={() => setFinishGap(null)}
+                  style={{ padding: "8px 18px", borderRadius: 2, fontSize: 13, fontWeight: 700, fontFamily: F, background: "var(--accent)", border: "1px solid var(--accent)", color: "var(--accent-text)", cursor: "pointer" }}>
+                  Keep editing
+                </button>
+                <button onClick={() => handleFinish()}
+                  style={{ padding: "8px 18px", borderRadius: 2, fontSize: 13, fontWeight: 700, fontFamily: F, background: "transparent", border: "1px solid var(--outline-variant)", color: "var(--on-surface-variant)", cursor: "pointer" }}>
+                  Complete anyway
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Excel Column Mapping Modal ── */}
       {xlsxPreview && (() => {
@@ -1759,7 +1920,7 @@ export default function WelcomePage() {
                     {xlsxPreview.sheets.map(s => (
                       <button key={s} onClick={() => {
                         const r = xlsxPreview.sheetRows[s];
-                        const kws = ["fajr","dhuhr","zuhr","asr","maghrib","isha","date","day"];
+                        const kws = ["fajr","dhuhr","zuhr","dhur","asr","maghrib","magrib","isha","date","day"];
                         const hi  = r.findIndex(row => row.some(c => kws.some(k => String(c ?? "").toLowerCase().includes(k))));
                         setXlsxPreview(p => p ? { ...p, selectedSheet: s, headerRowIdx: Math.max(0, hi) } : p);
                         if (hi >= 0) xlsxAutoMap(r[hi].map(h => String(h ?? "").trim()));

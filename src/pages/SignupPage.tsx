@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import useIsMobile from "../hooks/useIsMobile";
 import { supabase } from "../lib/supabase";
+import ThemeToggle from "../components/ThemeToggle";
 
 const inp: React.CSSProperties = {
   width: "100%", padding: "10px 12px", background: "var(--surface-low)",
@@ -15,6 +16,18 @@ const lbl: React.CSSProperties = {
   marginBottom: 6, letterSpacing: "0.02em",
 };
 
+const errText: React.CSSProperties = {
+  color: "#f87171", fontSize: 11.5, fontWeight: 500, margin: "5px 0 0", lineHeight: 1.4,
+};
+
+// ── Validation ──────────────────────────────────────────────────────────────
+const isValidEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+// Accepts +, spaces, dashes, parens; requires 7–15 digits (ITU E.164 range).
+const isValidPhone = (v: string) => {
+  const digits = v.replace(/[^\d]/g, "");
+  return digits.length >= 7 && digits.length <= 15;
+};
+
 const SignupPage: React.FC = () => {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -26,6 +39,9 @@ const SignupPage: React.FC = () => {
     masjidName: "", street: "", city: "", state: "", postalCode: "", country: "",
     masjidPhone: "", masjidEmail: "", inchargeName: "", inchargePhone: "",
   });
+  // Which fields the user has interacted with — errors surface under a field only
+  // after it's been touched (or after a submit attempt), never all at once up-front.
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     const token = localStorage.getItem("access_token") || sessionStorage.getItem("access_token");
@@ -36,10 +52,31 @@ const SignupPage: React.FC = () => {
     setFormData(p => ({ ...p, [field]: e.target.value }));
     setError("");
   };
+  const markTouched = (field: string) => setTouched(t => ({ ...t, [field]: true }));
+
+  // Per-field validation message ("" = valid). Recomputed each render so the
+  // message clears the moment the user fixes the field.
+  const errorFor = (field: string): string => {
+    const v = (formData as Record<string, string>)[field] ?? "";
+    switch (field) {
+      case "masjidName":    return v.trim() ? "" : "Masjid name is required.";
+      case "inchargeName":  return v.trim() ? "" : "Full name is required.";
+      case "masjidEmail":   return !v.trim() ? "Masjid email is required." : isValidEmail(v) ? "" : "Enter a valid email (e.g. info@masjid.ca).";
+      case "masjidPhone":   return v && !isValidPhone(v) ? "Enter a valid phone number (7–15 digits)." : "";
+      case "inchargePhone": return v && !isValidPhone(v) ? "Enter a valid phone number (7–15 digits)." : "";
+      default: return "";
+    }
+  };
+  const showErr = (field: string) => touched[field] ? errorFor(field) : "";
+  const fieldErr = (field: string) => { const m = showErr(field); return m ? <p style={errText}>{m}</p> : null; };
+  // Inputs turn red once touched-and-invalid; border logic lives here so focus/blur respect it.
+  const fieldBorder = (field: string) => showErr(field) ? "#f87171" : "var(--outline-variant)";
 
   const handleSubmit = async () => {
-    if (!formData.masjidName || !formData.masjidEmail || !formData.inchargeName) {
-      setError("Please fill in all required fields");
+    const validated = ["masjidName", "masjidEmail", "inchargeName", "masjidPhone", "inchargePhone"];
+    if (validated.some(f => errorFor(f))) {
+      // Reveal every field's inline error rather than a single bottom message.
+      setTouched(t => ({ ...t, ...Object.fromEntries(validated.map(f => [f, true])) }));
       return;
     }
     setIsSubmitting(true);
@@ -96,9 +133,13 @@ const SignupPage: React.FC = () => {
           </div>
           <span style={{ fontWeight: 700, fontSize: 15, color: "var(--on-surface)" }}>jam3ah</span>
         </div>
-        <button onClick={() => navigate("/login")} style={{ background: "none", border: "none", color: "var(--text-ghost)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
-          Already registered? Sign in →
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <button onClick={() => navigate("/login")} style={{ background: "none", border: "none", color: "var(--on-surface-variant)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
+            Already registered?{" "}
+            <span style={{ color: "var(--on-surface)", fontWeight: 700 }}>Sign in →</span>
+          </button>
+          <ThemeToggle />
+        </div>
       </nav>
 
       {/* Content */}
@@ -124,8 +165,9 @@ const SignupPage: React.FC = () => {
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <div>
                 <label style={lbl}>Masjid Name <span style={{ color: "#f87171" }}>*</span></label>
-                <input type="text" value={formData.masjidName} onChange={set("masjidName")} style={inp} placeholder="e.g. Al-Noor Islamic Centre"
-                  onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
+                <input type="text" value={formData.masjidName} onChange={set("masjidName")} style={{ ...inp, borderColor: fieldBorder("masjidName") }} placeholder="e.g. Al-Noor Islamic Centre"
+                  onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { markTouched("masjidName"); e.target.style.borderColor = fieldBorder("masjidName"); }} />
+                {fieldErr("masjidName")}
               </div>
               <div>
                 <label style={lbl}>Street Address</label>
@@ -159,13 +201,15 @@ const SignupPage: React.FC = () => {
               <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
                 <div>
                   <label style={lbl}>Masjid Phone</label>
-                  <input type="tel" value={formData.masjidPhone} onChange={set("masjidPhone")} style={inp} placeholder="+1 (555) 000-0000"
-                    onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
+                  <input type="tel" value={formData.masjidPhone} onChange={set("masjidPhone")} style={{ ...inp, borderColor: fieldBorder("masjidPhone") }} placeholder="+1 (555) 000-0000"
+                    onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { markTouched("masjidPhone"); e.target.style.borderColor = fieldBorder("masjidPhone"); }} />
+                  {fieldErr("masjidPhone")}
                 </div>
                 <div>
                   <label style={lbl}>Masjid Email <span style={{ color: "#f87171" }}>*</span></label>
-                  <input type="email" value={formData.masjidEmail} onChange={set("masjidEmail")} style={inp} placeholder="info@masjid.ca"
-                    onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
+                  <input type="email" value={formData.masjidEmail} onChange={set("masjidEmail")} style={{ ...inp, borderColor: fieldBorder("masjidEmail") }} placeholder="info@masjid.ca"
+                    onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { markTouched("masjidEmail"); e.target.style.borderColor = fieldBorder("masjidEmail"); }} />
+                  {fieldErr("masjidEmail")}
                 </div>
               </div>
             </div>
@@ -182,13 +226,15 @@ const SignupPage: React.FC = () => {
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
               <div>
                 <label style={lbl}>Full Name <span style={{ color: "#f87171" }}>*</span></label>
-                <input type="text" value={formData.inchargeName} onChange={set("inchargeName")} style={inp} placeholder="Sheikh Abdullah"
-                  onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
+                <input type="text" value={formData.inchargeName} onChange={set("inchargeName")} style={{ ...inp, borderColor: fieldBorder("inchargeName") }} placeholder="Sheikh Abdullah"
+                  onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { markTouched("inchargeName"); e.target.style.borderColor = fieldBorder("inchargeName"); }} />
+                {fieldErr("inchargeName")}
               </div>
               <div>
                 <label style={lbl}>Phone Number</label>
-                <input type="tel" value={formData.inchargePhone} onChange={set("inchargePhone")} style={inp} placeholder="+1 (555) 000-0000"
-                  onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
+                <input type="tel" value={formData.inchargePhone} onChange={set("inchargePhone")} style={{ ...inp, borderColor: fieldBorder("inchargePhone") }} placeholder="+1 (555) 000-0000"
+                  onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { markTouched("inchargePhone"); e.target.style.borderColor = fieldBorder("inchargePhone"); }} />
+                {fieldErr("inchargePhone")}
               </div>
             </div>
           </div>
@@ -211,8 +257,13 @@ const SignupPage: React.FC = () => {
             ) : "Submit Registration"}
           </button>
 
-          <p style={{ fontSize: 11, color: "var(--outline)", textAlign: "center", margin: 0 }}>
-            By submitting, you agree to our terms. Your registration will be reviewed by the admin team.
+          <p style={{ fontSize: 12, color: "var(--on-surface-variant)", textAlign: "center", margin: 0, lineHeight: 1.5 }}>
+            By submitting, you agree to our{" "}
+            {/* TODO: point href to the real Terms & Conditions page when it exists */}
+            <a href="/terms" onClick={e => e.preventDefault()}
+              style={{ color: "var(--accent)", fontWeight: 600, textDecoration: "underline", textUnderlineOffset: 2, cursor: "pointer" }}>
+              terms
+            </a>. Your registration will be reviewed by the admin team.
           </p>
         </div>
       </div>

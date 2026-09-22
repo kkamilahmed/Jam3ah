@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import ThemeToggle from "../components/ThemeToggle";
 
 const LoginPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [resetMsg, setResetMsg] = useState("");
+  const [resetSending, setResetSending] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -19,6 +22,29 @@ const LoginPage: React.FC = () => {
     const value = e.target.type === "checkbox" ? e.target.checked : e.target.value;
     setFormData({ ...formData, [e.target.name]: value });
     setError("");
+    setResetMsg("");
+  };
+
+  const handleForgotPassword = async () => {
+    setError("");
+    setResetMsg("");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
+      setError("Enter your email address above first, then click “Forgot password?”.");
+      return;
+    }
+    setResetSending(true);
+    try {
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+        formData.email.trim(),
+        { redirectTo: `${window.location.origin}/login` },
+      );
+      if (resetError) throw new Error(resetError.message);
+      setResetMsg("If an account exists for that email, a password-reset link is on its way.");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Couldn't send reset email. Try again.");
+    } finally {
+      setResetSending(false);
+    }
   };
 
   const handleLogin = async () => {
@@ -31,8 +57,9 @@ const LoginPage: React.FC = () => {
     }
     try {
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-        email: formData.email,
-        password: formData.password,
+        // Trim to avoid "Invalid login credentials" from a stray copy-pasted space.
+        email: formData.email.trim(),
+        password: formData.password.trim(),
       });
       if (authError) throw new Error(authError.message);
       const storage = formData.rememberMe ? localStorage : sessionStorage;
@@ -74,12 +101,15 @@ const LoginPage: React.FC = () => {
           </div>
           <span style={{ fontWeight: 700, fontSize: 15, color: "var(--on-surface)" }}>jam3ah</span>
         </div>
-        <button
-          onClick={() => navigate("/signup")}
-          style={{ padding: "7px 14px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, color: "var(--on-surface-variant)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}
-        >
-          Register Masjid
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <button
+            onClick={() => navigate("/signup")}
+            style={{ padding: "7px 14px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, color: "var(--on-surface-variant)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}
+          >
+            Register Masjid
+          </button>
+          <ThemeToggle />
+        </div>
       </nav>
 
       {/* Content */}
@@ -116,7 +146,13 @@ const LoginPage: React.FC = () => {
 
               {/* Password */}
               <div>
-                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--on-surface-variant)", marginBottom: 7 }}>Password</label>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "var(--on-surface-variant)" }}>Password</label>
+                  <button type="button" onClick={handleForgotPassword} disabled={resetSending}
+                    style={{ background: "none", border: "none", padding: 0, fontFamily: "Manrope, sans-serif", fontSize: 12, fontWeight: 600, color: "var(--accent)", cursor: resetSending ? "default" : "pointer", opacity: resetSending ? 0.6 : 1 }}>
+                    {resetSending ? "Sending…" : "Forgot password?"}
+                  </button>
+                </div>
                 <div style={{ position: "relative" }}>
                   <span className="material-symbols-outlined" style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", fontSize: 18, color: "var(--text-phantom)", pointerEvents: "none" }}>lock</span>
                   <input
@@ -144,6 +180,13 @@ const LoginPage: React.FC = () => {
               {error && (
                 <div style={{ padding: "10px 14px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 2 }}>
                   <p style={{ color: "#f87171", fontSize: 13, margin: 0, fontWeight: 500 }}>{error}</p>
+                </div>
+              )}
+
+              {/* Reset confirmation */}
+              {resetMsg && (
+                <div style={{ padding: "10px 14px", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2 }}>
+                  <p style={{ color: "var(--accent)", fontSize: 13, margin: 0, fontWeight: 500 }}>{resetMsg}</p>
                 </div>
               )}
 
