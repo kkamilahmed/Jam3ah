@@ -71,7 +71,7 @@ export function addMinsToTime(timeStr: string, mins: number): string {
   return `${dh}:${String(nm).padStart(2, "0")} ${np}`;
 }
 
-export function makeBatchCell(_offset?: number): BatchCell { return { mode: "fixed", offset: 0, fixed: "" }; }
+export function makeBatchCell(): BatchCell { return { mode: "fixed", offset: 0, fixed: "" }; }
 
 export function makeDefaultBatchAdhan(): BatchConfig {
   return { fajr: makeBatchCell(), dhuhr: makeBatchCell(), asr: makeBatchCell(), maghrib: makeBatchCell(), isha: makeBatchCell() };

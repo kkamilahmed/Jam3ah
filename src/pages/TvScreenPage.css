@@ -1,0 +1,460 @@
+@import url("https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&display=swap");
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   TV screen. Built on the dashboard design system (dashboard.css, `.dash` tokens)
+   and scaled up to be read from across a prayer hall.
+   Everything is sized in --u, a viewport unit that is 1% of the long side on a
+   16:9 screen and shrinks on narrower or squatter screens, so nothing scrolls or clips.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* `.dash.tv` outranks the dashboard's narrow-screen rules (bottom-nav padding). */
+.dash.tv {
+  box-sizing: border-box;
+  padding: 0;
+}
+.tv {
+  --u: min(1vw, 1.7778vh);
+  --tv-gap: calc(var(--u) * 1.4);
+  --tv-pad: calc(var(--u) * 2.4);
+  --tv-radius: calc(var(--d-r-card) * 1.6);
+
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  user-select: none;
+}
+.tv.tv--v {
+  --u: min(1vh, 1.7778vw);
+  --tv-gap: calc(var(--u) * 1.4);
+  --tv-pad: calc(var(--u) * 2.8);
+}
+
+.tv .tv-screen {
+  box-sizing: border-box;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tv-gap);
+  padding: calc(var(--u) * 1.8) var(--tv-pad) calc(var(--u) * 2.2);
+}
+
+/* ── Type ─────────────────────────────────────────────────────────────── */
+.tv .tv-clock-hm,
+.tv .tv-clock-sec,
+.tv .tv-clock-ampm,
+.tv .tv-pname,
+.tv .tv-time,
+.tv .tv-jummah-title,
+.tv .tv-next-count {
+  font-family: var(--d-font-head);
+  font-variant-numeric: tabular-nums;
+}
+.tv .tv-time {
+  display: inline-flex;
+  align-items: baseline;
+  white-space: nowrap;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.tv .tv-ampm {
+  margin-left: 0.22em;
+  font-size: 0.5em;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+/* ── Header: clock and dates ──────────────────────────────────────────── */
+.tv .tv-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--u) * 3);
+}
+.tv .tv-clock {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 0.8);
+  color: var(--d-text);
+  line-height: 1;
+  white-space: nowrap;
+}
+.tv .tv-clock-hm {
+  font-size: calc(var(--u) * 7.4);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+.tv .tv-clock-side {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 0.5);
+}
+.tv .tv-clock-sec {
+  font-size: calc(var(--u) * 2.6);
+  font-weight: 600;
+  color: var(--d-text-2);
+}
+.tv .tv-clock-ampm {
+  font-size: calc(var(--u) * 2.6);
+  font-weight: 800;
+}
+.tv .tv-dates {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: calc(var(--u) * 0.5);
+  text-align: right;
+  line-height: 1.2;
+}
+.tv .tv-date {
+  font-size: calc(var(--u) * 2.4);
+  font-weight: 700;
+  color: var(--d-text);
+}
+.tv .tv-hijri {
+  font-size: calc(var(--u) * 2.1);
+  color: var(--d-text-2);
+}
+
+/* ── Cards ────────────────────────────────────────────────────────────── */
+.tv .tv-card {
+  box-sizing: border-box;
+  background: var(--d-surface);
+  border: 1px solid var(--d-border);
+  border-radius: var(--tv-radius);
+  box-shadow: var(--d-shadow);
+  min-width: 0;
+  min-height: 0;
+}
+
+.tv .tv-pname {
+  margin: 0;
+  font-size: calc(var(--u) * 2.9);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+  color: var(--d-text);
+}
+.tv .tv-adhan {
+  font-size: calc(var(--u) * 3.2);
+  font-weight: 600;
+  color: var(--d-text);
+}
+.tv .tv-iqama {
+  font-size: calc(var(--u) * 3.9);
+  font-weight: 800;
+  color: var(--d-text);
+}
+.tv .tv-extra {
+  display: inline-flex;
+  align-items: baseline;
+  gap: calc(var(--u) * 0.6);
+  font-size: calc(var(--u) * 2);
+  font-weight: 700;
+  color: var(--d-text);
+}
+.tv .tv-extra .tv-time {
+  font-weight: 700;
+}
+.tv .tv-extra-label {
+  font-size: calc(var(--u) * 1.6);
+  font-weight: 700;
+  color: var(--d-text-2);
+}
+
+/* Prayers already prayed today step back but stay readable. */
+.tv .is-past .tv-pname,
+.tv .is-past .tv-time {
+  color: var(--d-text-2);
+}
+
+/* The next prayer: solid accent fill, a "Next prayer" label and the countdown. */
+.tv .is-next {
+  background: var(--d-accent);
+  border-color: var(--d-accent);
+}
+.tv .is-next .tv-pname,
+.tv .is-next .tv-time,
+.tv .is-next .tv-slot-label,
+.tv .is-next .tv-extra-label {
+  color: var(--d-on-accent);
+}
+.tv .tv-next-label {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  padding: calc(var(--u) * 0.25) calc(var(--u) * 1);
+  border-radius: 999px;
+  background: var(--d-on-accent);
+  color: var(--d-accent);
+  font-size: calc(var(--u) * 1.6);
+  font-weight: 700;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+.tv .tv-next-count {
+  font-size: calc(var(--u) * 2.6);
+  font-weight: 800;
+  line-height: 1;
+  color: var(--d-on-accent);
+  white-space: nowrap;
+}
+
+/* ── Landscape: five prayer cards side by side ────────────────────────── */
+.tv--h .tv-cols {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--tv-gap);
+}
+.tv--h .tv-col {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: calc(var(--u) * 1);
+  padding: calc(var(--u) * 1.7) calc(var(--u) * 1.8);
+  overflow: hidden;
+}
+.tv--h .tv-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(var(--u) * 0.3);
+}
+.tv--h .tv-slot-label {
+  font-size: calc(var(--u) * 1.6);
+  font-weight: 700;
+  color: var(--d-text-2);
+  line-height: 1.2;
+}
+.tv--h .tv-jummah-times {
+  flex-wrap: nowrap;
+}
+.tv--h .tv-next {
+  display: flex;
+}
+.tv .tv-placeholder {
+  visibility: hidden;
+}
+.tv--h .tv-next .tv-next-label {
+  font-size: calc(var(--u) * 1.8);
+  padding: calc(var(--u) * 0.3) calc(var(--u) * 1.2);
+}
+
+/* Countdown to the next adhan, centred in the header. */
+.tv--h .tv-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.tv--h .tv-countdown {
+  justify-self: center;
+}
+.tv--h .tv-date,
+.tv--h .tv-hijri {
+  white-space: nowrap;
+}
+.tv--h .tv-countdown {
+  display: flex;
+  align-items: baseline;
+  gap: calc(var(--u) * 1.2);
+  padding: calc(var(--u) * 1.1) calc(var(--u) * 2.4);
+  border-radius: var(--tv-radius);
+  background: var(--d-accent-soft);
+  color: var(--d-accent-soft-text);
+  white-space: nowrap;
+}
+.tv--h .tv-countdown-label {
+  font-size: calc(var(--u) * 2.4);
+  font-weight: 700;
+  line-height: 1.1;
+}
+.tv--h .tv-countdown-time {
+  font-family: var(--d-font-head);
+  font-variant-numeric: tabular-nums;
+  font-size: calc(var(--u) * 4.2);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.tv--h .tv-foot {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--tv-gap);
+}
+.tv--h .tv-foot--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* ── Jumu'ah ──────────────────────────────────────────────────────────── */
+.tv .tv-jummah {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: calc(var(--u) * 1);
+  padding: calc(var(--u) * 1.6) calc(var(--u) * 2);
+}
+.tv .tv-jummah-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: calc(var(--u) * 1.2);
+  row-gap: calc(var(--u) * 0.2);
+}
+.tv .tv-jummah-title {
+  font-size: calc(var(--u) * 2.4);
+  font-weight: 800;
+  color: var(--d-text);
+  line-height: 1.1;
+}
+.tv .tv-jummah-when {
+  font-size: calc(var(--u) * 1.8);
+  color: var(--d-text-2);
+}
+.tv .tv-jummah-times {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: calc(var(--u) * 2.2);
+  row-gap: calc(var(--u) * 0.6);
+}
+.tv .tv-jummah-times .tv-time {
+  font-size: calc(var(--u) * 2.8);
+  font-weight: 800;
+  color: var(--d-text);
+}
+
+/* ── Ayah ─────────────────────────────────────────────────────────────── */
+.tv .tv-ayah {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--u) * 0.7);
+  padding: calc(var(--u) * 1.1) calc(var(--u) * 3);
+  text-align: center;
+}
+.tv .tv-ayah-ar {
+  margin: 0;
+  font-family: "Amiri", "Traditional Arabic", "Geeza Pro", serif;
+  font-size: calc(var(--u) * 2.5);
+  font-weight: 700;
+  line-height: 1.5;
+  color: var(--d-text);
+}
+.tv .tv-ayah-en {
+  margin: 0;
+  font-size: calc(var(--u) * 1.8);
+  line-height: 1.35;
+  color: var(--d-text-2);
+  text-wrap: balance;
+}
+.tv .tv-ayah-ref {
+  white-space: nowrap;
+  font-weight: 700;
+  color: var(--d-accent-soft-text);
+  margin-left: calc(var(--u) * 0.6);
+}
+
+/* ── Portrait: a scaled-up version of the dashboard's prayer table ────── */
+.tv--v .tv-head {
+  flex-direction: column;
+  justify-content: center;
+  gap: calc(var(--u) * 1);
+  padding-top: calc(var(--u) * 0.6);
+}
+.tv--v .tv-clock-hm {
+  font-size: calc(var(--u) * 9.4);
+}
+.tv--v .tv-clock-sec,
+.tv--v .tv-clock-ampm {
+  font-size: calc(var(--u) * 3.4);
+}
+.tv--v .tv-dates {
+  align-items: center;
+  text-align: center;
+}
+.tv--v .tv-table {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.tv--v .tv-trow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1.1fr);
+  align-items: center;
+  column-gap: calc(var(--u) * 1.6);
+  padding: 0 calc(var(--u) * 2.6);
+}
+.tv--v .tv-thead {
+  flex-shrink: 0;
+  height: calc(var(--u) * 4.6);
+  background: var(--d-surface-2);
+  font-size: calc(var(--u) * 1.9);
+  font-weight: 700;
+  color: var(--d-text-2);
+}
+.tv--v .tv-trow:not(.tv-thead) {
+  flex: 1 0 auto;
+  padding-top: calc(var(--u) * 1);
+  padding-bottom: calc(var(--u) * 1);
+  border-top: 1px solid var(--d-border);
+}
+.tv--v .tv-trow.is-next {
+  border-top-color: var(--d-accent);
+}
+.tv--v .tv-trow.is-next + .tv-trow {
+  border-top-color: var(--d-accent);
+}
+.tv--v .tv-tname {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(var(--u) * 0.8);
+  min-width: 0;
+}
+.tv--v .tv-pname {
+  font-size: calc(var(--u) * 3.4);
+}
+.tv--v .tv-next-inline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * 0.9);
+}
+.tv--v .tv-next-count {
+  font-size: calc(var(--u) * 2.4);
+}
+.tv--v .tv-tiqama {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(var(--u) * 0.4);
+}
+.tv--v .tv-jummah {
+  flex-shrink: 0;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--u) * 2);
+  padding: calc(var(--u) * 1.5) calc(var(--u) * 2.6);
+}
+.tv--v .tv-jummah-head {
+  flex-direction: column;
+  align-items: flex-start;
+}
+.tv--v .tv-jummah-title {
+  font-size: calc(var(--u) * 3);
+}
+.tv--v .tv-jummah-times {
+  justify-content: flex-end;
+}
+.tv--v .tv-ayah {
+  flex-shrink: 0;
+  padding: calc(var(--u) * 1.6) calc(var(--u) * 3);
+}
+.tv--v .tv-ayah-ar {
+  font-size: calc(var(--u) * 2.7);
+}

@@ -1,535 +1,328 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import useIsMobile from "../hooks/useIsMobile";
 import * as XLSX from "xlsx";
 import { supabaseAdmin } from "../lib/supabase";
 
-import type {
-  PrayerTime,
-  Event,
-  EventForm,
-  Announcement,
-  Month,
-  BatchCell,
-  BatchCell2,
-  BatchConfig,
-} from "../dashboard/types";
-import { THEMES, type ThemeKey } from "../dashboard/themes";
+import type { PrayerTime, Event, Announcement, BatchCell, BatchCell2, BatchConfig } from "../dashboard/types";
+import { to12h, makeDefaultBatchAdhan, makeDefaultBatchIqama, applyBatchCell, addDefaultAdhanIqama } from "../dashboard/utils";
 import {
-  to12h,
-  makeDefaultBatchAdhan,
-  makeDefaultBatchIqama,
-  applyBatchCell,
-  addDefaultAdhanIqama,
-} from "../dashboard/utils";
-import {
-  generateYearAdhan,
-  generateMonthAdhan,
-  mergePresetWithLocation,
-  type PrayerPreset,
-  type MonthPresetMap,
+  CALC_METHODS, generateMonthAdhan, mergePresetWithLocation,
+  type PrayerPreset, type MonthPresetMap,
 } from "../dashboard/constants";
-// CrescentIcon imported for potential future use
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+import {
+  PRAYER_KEYS, PRAYER_NAMES, activePeriod, adhanOf, defaultRule, describePeriod, iqamaFromRule, inferRule, normalizeConfig, ruleMatches, ruleOn,
+  type IqamaConfig, type IqamaPeriod, type IqamaRule, type PrayerIqama, type PrayerKey,
+} from "../dashboard/iqama";
+import { addDaysISO, fmt12, localISODate, parseISODate, toMinutes } from "../dashboard/time";
 
-import OverviewTab from "../dashboard/tabs/OverviewTab";
+import { useDashTheme } from "../dashboard/theme";
+import DashboardShell, { DASHBOARD_TABS, type DashboardTab } from "../dashboard/DashboardShell";
+import { ConfirmDialog, Modal, Spinner, Toast, type ToastState } from "../dashboard/ui";
+import HomeTab from "../dashboard/tabs/HomeTab";
 import PrayerTimesTab from "../dashboard/tabs/PrayerTimesTab";
-import EventsTab from "../dashboard/tabs/EventsTab";
-import SettingsTab from "../dashboard/tabs/SettingsTab";
+import EventsTab, { type AnnouncementInput, type Composer, type EventInput } from "../dashboard/tabs/EventsTab";
+import SettingsTab, { type GeneralSettings } from "../dashboard/tabs/SettingsTab";
+import IqamaEditor from "../dashboard/components/IqamaEditor";
+import PeriodEditor from "../dashboard/components/PeriodEditor";
+import DayEditor from "../dashboard/components/DayEditor";
+import JumuahEditor from "../dashboard/components/JumuahEditor";
+import BulkEditor from "../dashboard/components/BulkEditor";
+import ExcelImportModal, { type XlsxPreview } from "../dashboard/components/ExcelImportModal";
 import TutorialOverlay from "../components/TutorialOverlay";
 
-// ── Dashboard Component ───────────────────────────────────────────────────
-const VALID_TABS = ["overview", "prayer-times", "events", "settings"];
+const TAB_IDS = DASHBOARD_TABS.map(t => t.id) as readonly string[];
+
+const TIME_FIELDS = [
+  "fajr", "dhuhr", "asr", "maghrib", "isha",
+  "fajr_adhan", "fajr_iqama", "fajr_iqama_2", "fajr_iqama_3",
+  "dhuhr_adhan", "dhuhr_iqama", "asr_adhan", "asr_iqama",
+  "maghrib_adhan", "maghrib_iqama", "maghrib_iqama_2", "maghrib_iqama_3",
+  "isha_adhan", "isha_iqama", "jummah_1", "jummah_2", "jummah_3",
+];
+const ROW_COLUMNS = ["date", ...TIME_FIELDS].join(",");
+
+type Extra = {
+  fajr: string[];
+  maghrib: string[];
+  jummah: string[];
+  jummahSlots: [boolean, boolean, boolean];
+  weekendIsha: { enabled: boolean; days: string[]; iqama: string };
+};
+type Jamaat = { fajr2: boolean; fajr3: boolean; maghrib2: boolean; maghrib3: boolean };
+type Location = { latitude: string; longitude: string; timezone: string };
+
+const DEFAULT_EXTRA: Extra = {
+  fajr: [],
+  maghrib: [],
+  jummah: ["", "", ""],
+  jummahSlots: [false, false, false],
+  weekendIsha: { enabled: true, days: ["fri", "sat"], iqama: "" },
+};
+
+const DEFAULT_PRESET: PrayerPreset = {
+  id: "default",
+  method: "NorthAmerica",
+  fajrAngle: "", ishaAngle: "", ishaInterval: "", maghribAngle: "",
+  madhab: "Shafi",
+  highLatitudeRule: "recommended",
+  polarCircleResolution: "AqrabBalad",
+  shafaq: "General",
+  rounding: "Nearest",
+  adjustFajr: "0", adjustSunrise: "0", adjustDhuhr: "0", adjustAsr: "0", adjustMaghrib: "0", adjustIsha: "0",
+};
+const DEFAULT_MONTH_MAP: MonthPresetMap = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [i + 1, DEFAULT_PRESET.id]));
+
+const readJSON = <T,>(key: string, fallback: T): T => {
+  try {
+    const s = localStorage.getItem(key);
+    return s ? (JSON.parse(s) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const getMasjidId = () => sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+
+// Stored times come in as "05:42" or "5:42 AM"; the dashboard keeps the 12-hour form.
+const normalizeRow = (row: Record<string, unknown>): PrayerTime => {
+  const out: Record<string, unknown> = { ...row };
+  for (const f of TIME_FIELDS) if (out[f]) out[f] = to12h(out[f] as string);
+  return out as unknown as PrayerTime;
+};
+
+const groupByMonth = (rows: PrayerTime[]) => {
+  const grouped: Record<string, PrayerTime[]> = {};
+  for (const r of rows) (grouped[r.date.slice(0, 7)] ??= []).push(r);
+  return grouped;
+};
+
+type DayRow = ReturnType<typeof generateMonthAdhan>[number];
+const withoutSunrise = (t: DayRow) => {
+  const { sunrise, ...rest } = t;
+  void sunrise;
+  return rest;
+};
+
+async function upsertInChunks(rows: Record<string, unknown>[]) {
+  for (let i = 0; i < rows.length; i += 100) {
+    const { error } = await supabaseAdmin.from("prayer_times").upsert(rows.slice(i, i + 100), { onConflict: "masjid_id,date" });
+    if (error) throw new Error(error.message);
+  }
+}
 
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const { tab } = useParams<{ tab: string }>();
-  const activeTab = VALID_TABS.includes(tab ?? "") ? tab! : "overview";
+  const activeTab = (TAB_IDS.includes(tab ?? "") ? tab : "overview") as DashboardTab;
+  const goTab = useCallback((t: DashboardTab) => { navigate(`/home/${t}`); window.scrollTo(0, 0); }, [navigate]);
 
-  const [seenTabs, setSeenTabs] = useState<Set<string>>(() => {
-    try { return new Set<string>(JSON.parse(localStorage.getItem("seen_tabs") || '["overview"]')); }
-    catch { return new Set(["overview"]); }
-  });
+  // ── Session guard ───────────────────────────────────────────────────────
+  useEffect(() => {
+    const token = localStorage.getItem("access_token") || sessionStorage.getItem("access_token");
+    if (!token) navigate("/", { replace: true });
+  }, [navigate]);
+
+  // ── Theme ───────────────────────────────────────────────────────────────
+  const { dark, toggle: toggleTheme } = useDashTheme();
+
+  // ── Clock ───────────────────────────────────────────────────────────────
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  const today = localISODate(now);
+
+  // ── Toast ───────────────────────────────────────────────────────────────
+  const [toast, setToast] = useState<ToastState>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const notify = useCallback((message: string, kind: "ok" | "error" = "ok") => {
+    clearTimeout(toastTimer.current);
+    setToast({ message, kind });
+    toastTimer.current = setTimeout(() => setToast(null), kind === "error" ? 7000 : 4500);
+  }, []);
+
+  // ── Tutorial ────────────────────────────────────────────────────────────
   const [showTutorial, setShowTutorial] = useState(() => !localStorage.getItem("tour_seen"));
-
-  const setActiveTab = (t: string) => {
-    setSeenTabs(prev => {
-      const next = new Set([...prev, t]);
-      localStorage.setItem("seen_tabs", JSON.stringify([...next]));
-      return next;
-    });
-    navigate(`/home/${t}`);
+  const closeTutorial = () => {
+    localStorage.setItem("tour_seen", "1");
+    setShowTutorial(false);
   };
 
-  const isMobile = useIsMobile();
-
-  // ── Theme ──────────────────────────────────────────────────────────────
-  const [themeName] = useState<ThemeKey>(() => {
-    return (localStorage.getItem("masjid_theme") as ThemeKey) || "emerald";
-  });
-  const theme = THEMES[themeName];
-  const [darkMode, setDarkMode] = useState<boolean>(
-    () => localStorage.getItem("app_theme") !== "light",
-  );
-  const toggleDarkMode = () => {
-    const next = !darkMode;
-    setDarkMode(next);
-    if (next) {
-      delete document.documentElement.dataset.theme;
-      localStorage.removeItem("app_theme");
-    } else {
-      document.documentElement.dataset.theme = "light";
-      localStorage.setItem("app_theme", "light");
-    }
+  // ── Masjid details ──────────────────────────────────────────────────────
+  const registeredEmail = sessionStorage.getItem("user_email") || localStorage.getItem("user_email") || "";
+  const initialGeneral: GeneralSettings = {
+    masjidName: sessionStorage.getItem("masjid_name") || localStorage.getItem("masjid_name") || "Your masjid",
+    address: "", city: "", province: "", postalCode: "", phone: "",
   };
-  const [settingsTab, setSettingsTab] = useState<string>("profile");
-  const [mounted, setMounted] = useState(false);
-  const [animDone, setAnimDone] = useState(false);
-  const [currentTime, setCurrentTime] = useState<Date>(new Date());
+  const [general, setGeneral] = useState<GeneralSettings>(initialGeneral);
+  const [savedGeneral, setSavedGeneral] = useState<GeneralSettings>(initialGeneral);
+  const [profileLoaded, setProfileLoaded] = useState(false);
 
-  const storedName =
-    sessionStorage.getItem("masjid_name") ||
-    localStorage.getItem("masjid_name") ||
-    "Toronto Hifz Academy";
-
-  // ── General settings ──────────────────────────────────────────────────
-  const registeredEmail =
-    sessionStorage.getItem("user_email") ||
-    localStorage.getItem("user_email") ||
-    "";
-
-  const defaultGeneralSettings = {
-    masjidName: storedName,
-    address: "",
-    city: "",
-    province: "",
-    postalCode: "",
-    phone: "",
-  };
-  const [generalSettings, setGeneralSettings] = useState(
-    defaultGeneralSettings,
-  );
-  const [savedGeneralSettings, setSavedGeneralSettings] = useState(
-    defaultGeneralSettings,
-  );
-  const [settingsSaved, setSettingsSaved] = useState(false);
-
-  // ── Prayer settings ───────────────────────────────────────────────────
-  const [prayerSettings, setPrayerSettings] = useState({
-    latitude: "43.651070",
-    longitude: "-79.347015",
-    timezone: "America/Toronto",
-    method: "NorthAmerica",
-    fajrAngle: "",
-    ishaAngle: "",
-    ishaInterval: "",
-    maghribAngle: "",
-    madhab: "Shafi",
-    highLatitudeRule: "recommended",
-    polarCircleResolution: "AqrabBalad",
-    shafaq: "General",
-    rounding: "Nearest",
-    adjustFajr: "0",
-    adjustSunrise: "0",
-    adjustDhuhr: "0",
-    adjustAsr: "0",
-    adjustMaghrib: "0",
-    adjustIsha: "0",
-  });
-
-  // ── Prayer times state ────────────────────────────────────────────────
-  const [prayerSource, setPrayerSource] = useState<"excel" | "backend">(
-    "backend",
-  );
-  const [pendingSource, setPendingSource] = useState<
-    "excel" | "backend" | null
-  >(null);
-  const [selectedYear, setSelectedYear] = useState<number>(
-    new Date().getFullYear(),
-  );
-  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  });
+  // ── Prayer settings ─────────────────────────────────────────────────────
+  const defaultLocation: Location = { latitude: "43.651070", longitude: "-79.347015", timezone: "America/Toronto" };
+  const [location, setLocationState] = useState<Location>(defaultLocation);
+  const [savedLocation, setSavedLocation] = useState<Location>(defaultLocation);
+  const setLocation = (patch: Partial<Location>) => setLocationState(l => ({ ...l, ...patch }));
+  const [prayerSource, setPrayerSource] = useState<"excel" | "backend">("backend");
+  const [pendingSource, setPendingSource] = useState<"excel" | "backend" | null>(null);
   const [switchLoading, setSwitchLoading] = useState(false);
-  const [prayerLoading, setPrayerLoading] = useState(true);
-  const [prayerTimesByMonth, setPrayerTimesByMonth] = useState<
-    Record<string, PrayerTime[]>
-  >({});
+  const [extraTimings, setExtraTimings] = useState<Extra>(DEFAULT_EXTRA);
+  const [jamaat, setJamaatState] = useState<Jamaat>({ fajr2: false, fajr3: false, maghrib2: false, maghrib3: false });
+  const [iqamaConfig, setIqamaConfig] = useState<IqamaConfig>({});
+
+  const [presets, setPresets] = useState<PrayerPreset[]>(() => readJSON("prayer_presets", [DEFAULT_PRESET]));
+  const [savedPresets, setSavedPresets] = useState<PrayerPreset[]>(() => readJSON("prayer_presets", [DEFAULT_PRESET]));
+  const [monthMap, setMonthMap] = useState<MonthPresetMap>(() => readJSON("month_preset_map", DEFAULT_MONTH_MAP));
+  const [savedMonthMap, setSavedMonthMap] = useState<MonthPresetMap>(() => readJSON("month_preset_map", DEFAULT_MONTH_MAP));
+  const [presetRegenConfirm, setPresetRegenConfirm] = useState(false);
+  const [savingCalculation, setSavingCalculation] = useState(false);
+  const [recalculating, setRecalculating] = useState(false);
+
+  // ── Prayer times ────────────────────────────────────────────────────────
+  const [selectedYear, setSelectedYear] = useState(() => now.getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState(() => today.slice(0, 7));
+  const [prayerLoading, setPrayerLoading] = useState(() => !!getMasjidId());
+  const [prayerTimesByMonth, setPrayerTimesByMonth] = useState<Record<string, PrayerTime[]>>({});
+  const [upcomingRows, setUpcomingRows] = useState<PrayerTime[]>([]);
+  const [scheduleEnd, setScheduleEnd] = useState<string | null>(null);
+  const [scheduleLoading, setScheduleLoading] = useState(() => !!getMasjidId());
+  const [generatingYear, setGeneratingYear] = useState<number | null>(null);
+
+  // Excel import
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState("");
   const [uploadError, setUploadError] = useState("");
-  const [xlsxPreview, setXlsxPreview] = useState<{
-    sheets: string[];
-    sheetRows: Record<string, string[][]>;
-    selectedSheet: string;
-    headerRowIdx: number;
-  } | null>(null);
+  const [xlsxPreview, setXlsxPreview] = useState<XlsxPreview | null>(null);
   const [colMap, setColMap] = useState<Record<string, string>>({
-    date: "",
-    day: "",
-    fajr: "",
-    dhuhr: "",
-    asr: "",
-    maghrib: "",
-    isha: "",
-    fajr_iqama: "",
-    dhuhr_iqama: "",
-    asr_iqama: "",
-    maghrib_iqama: "",
-    isha_iqama: "",
-    jummah1: "",
-    jummah2: "",
-    jummah3: "",
-  });
-  const [importMonth] = useState<string>(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  });
-  const defaultExtra = {
-    fajr: [] as string[],
-    maghrib: [] as string[],
-    jummah: ["", "", ""],
-    jummahSlots: [false, false, false] as [boolean, boolean, boolean],
-    weekendIsha: { enabled: true, days: ["fri", "sat"] as string[], iqama: "" },
-  };
-  const [extraTimings, setExtraTimings] = useState<{
-    fajr: string[];
-    maghrib: string[];
-    jummah: string[];
-    jummahSlots: [boolean, boolean, boolean];
-    weekendIsha: { enabled: boolean; days: string[]; iqama: string };
-  }>(defaultExtra);
-
-  // ── Jamaat settings ───────────────────────────────────────────────────
-  const [jamaatSettings, setJamaatSettings] = useState({
-    fajr2: false,
-    fajr3: false,
-    maghrib2: false,
-    maghrib3: false,
+    date: "", day: "", fajr: "", dhuhr: "", asr: "", maghrib: "", isha: "",
+    fajr_iqama: "", dhuhr_iqama: "", asr_iqama: "", maghrib_iqama: "", isha_iqama: "",
+    jummah1: "", jummah2: "", jummah3: "",
   });
 
-  // ── Batch update state ────────────────────────────────────────────────
+  // Bulk editing
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [batchFrom, setBatchFrom] = useState("");
   const [batchTo, setBatchTo] = useState("");
-  const [batchAdhan, setBatchAdhan] = useState<BatchConfig>(
-    makeDefaultBatchAdhan(),
-  );
-  const [batchIqama, setBatchIqama] = useState<BatchConfig>(
-    makeDefaultBatchIqama(),
-  );
-  const [batchIqama2, setBatchIqama2] = useState<{
-    fajr: BatchCell2;
-    maghrib: BatchCell2;
-  }>({
-    fajr: { mode: "fixed", offset: 0, fixed: "", enabled: false },
-    maghrib: { mode: "fixed", offset: 0, fixed: "", enabled: false },
-  });
-  const [batchIqama3, setBatchIqama3] = useState<{
-    fajr: BatchCell2;
-    maghrib: BatchCell2;
-  }>({
-    fajr: { mode: "fixed", offset: 0, fixed: "", enabled: false },
-    maghrib: { mode: "fixed", offset: 0, fixed: "", enabled: false },
-  });
+  const [batchAdhan, setBatchAdhan] = useState<BatchConfig>(makeDefaultBatchAdhan());
+  const [batchIqama, setBatchIqama] = useState<BatchConfig>(makeDefaultBatchIqama());
+  const emptyCell2: BatchCell2 = { mode: "fixed", offset: 0, fixed: "", enabled: false };
+  const [batchIqama2, setBatchIqama2] = useState({ fajr: emptyCell2, maghrib: emptyCell2 });
+  const [batchIqama3, setBatchIqama3] = useState({ fajr: emptyCell2, maghrib: emptyCell2 });
   const [applyingBatch, setApplyingBatch] = useState(false);
   const [batchApplied, setBatchApplied] = useState(false);
   const [batchError, setBatchError] = useState("");
 
-  // ── Events state ──────────────────────────────────────────────────────
+  // Editors
+  const [iqamaEdit, setIqamaEdit] = useState<{ prayer: PrayerKey | null } | null>(null);
+  const [periodEdit, setPeriodEdit] = useState<{ prayer: PrayerKey | null; period?: IqamaPeriod } | null>(null);
+  const [dayEdit, setDayEdit] = useState<PrayerTime | null>(null);
+  const [jumuahOpen, setJumuahOpen] = useState(false);
+
+  // ── Events & announcements ──────────────────────────────────────────────
   const [events, setEvents] = useState<Event[]>([]);
-  const [eventsLoading, setEventsLoading] = useState(true);
-  const [eventsSubTab, setEventsSubTab] = useState<"events" | "announcements">(
-    "events",
-  );
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
-  const [editingAnnouncement, setEditingAnnouncement] =
-    useState<Announcement | null>(null);
-  const [announcementForm, setAnnouncementForm] = useState({
-    title: "",
-    body: "",
-    expiresAt: "",
-  });
-  const [editingEvent, setEditingEvent] = useState<Event | null>(null);
-  const [eventForm, setEventForm] = useState<EventForm>({
-    title: "",
-    description: "",
-    date: "",
-    time: "",
-    endTime: "",
-    category: "General",
-  });
-  const [eventsPanel, setEventsPanel] = useState(false);
+  const [eventsLoading, setEventsLoading] = useState(() => !!getMasjidId());
+  const [eventsView, setEventsView] = useState<"events" | "announcements">("announcements");
+  const [composer, setComposer] = useState<Composer>(null);
 
-  // ── Presets & schedule ────────────────────────────────────────────────
-  const defaultPresetId = "default";
-  const defaultPreset: PrayerPreset = {
-    id: defaultPresetId,
-    method: "NorthAmerica",
-    fajrAngle: "",
-    ishaAngle: "",
-    ishaInterval: "",
-    maghribAngle: "",
-    madhab: "Shafi",
-    highLatitudeRule: "recommended",
-    polarCircleResolution: "AqrabBalad",
-    shafaq: "General",
-    rounding: "Nearest",
-    adjustFajr: "0",
-    adjustSunrise: "0",
-    adjustDhuhr: "0",
-    adjustAsr: "0",
-    adjustMaghrib: "0",
-    adjustIsha: "0",
-  };
-  const [prayerPresets, setPrayerPresets] = useState<PrayerPreset[]>(() => {
-    try {
-      const s = localStorage.getItem("prayer_presets");
-      if (s) return JSON.parse(s);
-    } catch {}
-    return [defaultPreset];
-  });
-  const [monthPresetMap, setMonthPresetMap] = useState<MonthPresetMap>(() => {
-    try {
-      const s = localStorage.getItem("month_preset_map");
-      if (s) return JSON.parse(s);
-    } catch {}
-    return Object.fromEntries(
-      Array.from({ length: 12 }, (_, i) => [i + 1, defaultPresetId]),
-    );
-  });
-  const [savedPrayerPresets, setSavedPrayerPresets] = useState<PrayerPreset[]>(
-    () => {
-      try {
-        const s = localStorage.getItem("prayer_presets");
-        if (s) return JSON.parse(s);
-      } catch {}
-      return [defaultPreset];
-    },
-  );
-  const [savedMonthPresetMap, setSavedMonthPresetMap] =
-    useState<MonthPresetMap>(() => {
-      try {
-        const s = localStorage.getItem("month_preset_map");
-        if (s) return JSON.parse(s);
-      } catch {}
-      return Object.fromEntries(
-        Array.from({ length: 12 }, (_, i) => [i + 1, defaultPresetId]),
-      );
-    });
-
-  const handleAddPreset = () => {
-    const id = crypto.randomUUID();
-    // Copy settings from first preset as a sensible default
-    const base = prayerPresets[0];
-    setPrayerPresets((prev) => [
-      ...prev,
-      {
-        id,
-        method: base?.method ?? "NorthAmerica",
-        fajrAngle: base?.fajrAngle ?? "",
-        ishaAngle: base?.ishaAngle ?? "",
-        ishaInterval: base?.ishaInterval ?? "",
-        maghribAngle: base?.maghribAngle ?? "",
-        madhab: base?.madhab ?? "Shafi",
-        highLatitudeRule: base?.highLatitudeRule ?? "recommended",
-        polarCircleResolution: base?.polarCircleResolution ?? "AqrabBalad",
-        shafaq: base?.shafaq ?? "General",
-        rounding: base?.rounding ?? "Nearest",
-        adjustFajr: "0",
-        adjustSunrise: "0",
-        adjustDhuhr: "0",
-        adjustAsr: "0",
-        adjustMaghrib: "0",
-        adjustIsha: "0",
-      },
-    ]);
-    // New preset starts with no months assigned — user clicks chips to assign
-  };
-
-  const handleDeletePreset = (id: string) => {
-    if (prayerPresets.length <= 1) return; // always keep at least one
-    setPrayerPresets((prev) => prev.filter((p) => p.id !== id));
-    setMonthPresetMap((prev) => {
-      const next = { ...prev };
-      Object.keys(next).forEach((k) => {
-        if (next[+k] === id) next[+k] = "";
-      });
-      return next;
-    });
-  };
-
-  const handleUpdatePreset = (id: string, patch: Partial<PrayerPreset>) =>
-    setPrayerPresets((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, ...patch } : p)),
-    );
-
-  const handleSetMonthPreset = (month: number, presetId: string) =>
-    setMonthPresetMap((prev) => ({ ...prev, [month]: presetId }));
-
-  // ── Schedule edit state ───────────────────────────────────────────────
-  const [savingSchedule, setSavingSchedule] = useState(false);
-  const [savedSchedule, setSavedSchedule] = useState(false);
-  const [scheduleEdited, setScheduleEdited] = useState(false);
-  const originalMonthSnapshot = useRef<Record<string, PrayerTime[]>>({});
-
-  // ── Derived ───────────────────────────────────────────────────────────
-
-  const months: Month[] = Array.from({ length: 12 }, (_, i) => {
-    const d = new Date(selectedYear, i, 1);
-    return {
-      value: `${selectedYear}-${String(i + 1).padStart(2, "0")}`,
-      label: d.toLocaleDateString("en-US", { month: "long", year: "numeric" }),
-    };
-  });
-
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const todayMonthKey = todayStr.slice(0, 7);
-  const todayRow = prayerTimesByMonth[todayMonthKey]?.find(
-    (r) => r.date === todayStr,
-  );
-
-  // ── Effects ───────────────────────────────────────────────────────────
-  useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    const token =
-      localStorage.getItem("access_token") ||
-      sessionStorage.getItem("access_token");
-    if (!token) navigate("/", { replace: true });
-  }, []);
-
-  useEffect(() => {
-    const t1 = setTimeout(() => setMounted(true), 10);
-    const t2 = setTimeout(() => setAnimDone(true), 650);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-    };
-  }, []);
-
-  // Lock body scroll when source-switch modal is open
-  useEffect(() => {
-    document.body.style.overflow = pendingSource ? "hidden" : "";
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, [pendingSource]);
-
-  // ── Load prayer times from Supabase ───────────────────────────────────
-  useEffect(() => {
-    const masjidId =
-      sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
-    if (!masjidId) {
-      setPrayerLoading(false);
-      return;
-    }
-    setPrayerLoading(true);
-
-    supabaseAdmin
+  // ── Loading ─────────────────────────────────────────────────────────────
+  const fetchYear = async (year: number) => {
+    const masjidId = getMasjidId();
+    if (!masjidId) return null;
+    const { data, error } = await supabaseAdmin
       .from("prayer_times")
-      .select(
-        "date,fajr,dhuhr,asr,maghrib,isha,fajr_adhan,fajr_iqama,fajr_iqama_2,fajr_iqama_3,dhuhr_adhan,dhuhr_iqama,asr_adhan,asr_iqama,maghrib_adhan,maghrib_iqama,maghrib_iqama_2,maghrib_iqama_3,isha_adhan,isha_iqama,jummah_1,jummah_2,jummah_3",
-      )
+      .select(ROW_COLUMNS)
       .eq("masjid_id", masjidId)
-      .gte("date", `${selectedYear}-01-01`)
-      .lte("date", `${selectedYear}-12-31`)
-      .order("date", { ascending: true })
-      .then(({ data, error }) => {
-        if (!error && data && data.length > 0) {
-          const grouped: Record<string, PrayerTime[]> = {};
-          const timeFields = [
-            "fajr",
-            "dhuhr",
-            "asr",
-            "maghrib",
-            "isha",
-            "fajr_adhan",
-            "fajr_iqama",
-            "fajr_iqama_2",
-            "fajr_iqama_3",
-            "dhuhr_adhan",
-            "dhuhr_iqama",
-            "asr_adhan",
-            "asr_iqama",
-            "maghrib_adhan",
-            "maghrib_iqama",
-            "maghrib_iqama_2",
-            "maghrib_iqama_3",
-            "isha_adhan",
-            "isha_iqama",
-            "jummah_1",
-            "jummah_2",
-            "jummah_3",
-          ];
-          for (const row of data) {
-            const key = (row.date as string).slice(0, 7);
-            if (!grouped[key]) grouped[key] = [];
-            const normalized: Record<string, unknown> = { ...row };
-            for (const f of timeFields) {
-              if (normalized[f]) normalized[f] = to12h(normalized[f] as string);
-            }
-            grouped[key].push(normalized as unknown as PrayerTime);
-          }
-          setPrayerTimesByMonth(grouped);
-          originalMonthSnapshot.current = { ...grouped };
-        }
-        setPrayerLoading(false);
-      });
+      .gte("date", `${year}-01-01`)
+      .lte("date", `${year}-12-31`)
+      .order("date", { ascending: true });
+    if (error) return null;
+    return groupByMonth(((data ?? []) as unknown as Record<string, unknown>[]).map(normalizeRow));
+  };
+
+  const fetchUpcoming = async () => {
+    const masjidId = getMasjidId();
+    if (!masjidId) return null;
+    const start = localISODate();
+    const [rowsRes, lastRes] = await Promise.all([
+      supabaseAdmin.from("prayer_times").select(ROW_COLUMNS).eq("masjid_id", masjidId)
+        .gte("date", start).lte("date", addDaysISO(start, 90)).order("date", { ascending: true }),
+      supabaseAdmin.from("prayer_times").select("date").eq("masjid_id", masjidId).order("date", { ascending: false }).limit(1).maybeSingle(),
+    ]);
+    if (rowsRes.error || lastRes.error) return null;
+    return {
+      rows: ((rowsRes.data ?? []) as unknown as Record<string, unknown>[]).map(normalizeRow),
+      end: (lastRes.data as { date: string } | null)?.date ?? null,
+    };
+  };
+
+  const applyYear = (grouped: Record<string, PrayerTime[]> | null) => {
+    if (grouped) setPrayerTimesByMonth(grouped);
+    setPrayerLoading(false);
+  };
+  const applyUpcoming = (u: Awaited<ReturnType<typeof fetchUpcoming>>) => {
+    if (u) { setUpcomingRows(u.rows); setScheduleEnd(u.end); }
+    setScheduleLoading(false);
+  };
+
+  const refreshPrayerTimes = async () => {
+    const [grouped, upcoming] = await Promise.all([fetchYear(selectedYear), fetchUpcoming()]);
+    applyYear(grouped);
+    applyUpcoming(upcoming);
+  };
+
+  useEffect(() => {
+    let alive = true;
+    fetchYear(selectedYear).then(g => { if (alive) applyYear(g); });
+    return () => { alive = false; };
   }, [selectedYear]);
 
-  // ── Sync selectedMonth when year changes ─────────────────────────────
+  // Reload "today" data on load and when the date rolls over while the dashboard is open.
   useEffect(() => {
-    const monthNum = selectedMonth.slice(5, 7);
-    setSelectedMonth(`${selectedYear}-${monthNum}`);
-  }, [selectedYear]);
+    let alive = true;
+    fetchUpcoming().then(u => { if (alive) applyUpcoming(u); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [today]);
 
-  // ── Load prayer settings from Supabase ───────────────────────────────
   useEffect(() => {
-    const masjidId =
-      sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+    const masjidId = getMasjidId();
     if (!masjidId) return;
     supabaseAdmin
       .from("prayer_settings")
-      .select("source, jummah_config, presets, latitude, longitude, timezone")
+      .select("source, jummah_config, presets, prayer_config, latitude, longitude, timezone")
       .eq("masjid_id", masjidId)
       .maybeSingle()
       .then(({ data }) => {
-        if (data?.jummah_config) {
-          const { jamaatSettings: savedJamaat, ...timings } =
-            data.jummah_config as typeof defaultExtra & {
-              jamaatSettings?: typeof jamaatSettings;
-            };
-          setExtraTimings(timings as typeof defaultExtra);
-          if (savedJamaat) setJamaatSettings(savedJamaat);
+        if (!data) return;
+        if (data.jummah_config) {
+          const { jamaatSettings: savedJamaat, ...timings } = data.jummah_config as Extra & { jamaatSettings?: Jamaat };
+          setExtraTimings({ ...DEFAULT_EXTRA, ...timings });
+          if (savedJamaat) setJamaatState(savedJamaat);
         }
-        if (data?.source === "excel" || data?.source === "backend") {
-          setPrayerSource(data.source);
-        }
-        if (data?.presets) {
+        if (data.source === "excel" || data.source === "backend") setPrayerSource(data.source);
+        if (Array.isArray(data.presets) && data.presets.length) {
           localStorage.setItem("prayer_presets", JSON.stringify(data.presets));
-          setPrayerPresets(data.presets);
-          setSavedPrayerPresets(data.presets);
+          setPresets(data.presets);
+          setSavedPresets(data.presets);
         }
-        if (data?.latitude || data?.longitude || data?.timezone) {
-          setPrayerSettings((prev) => ({
-            ...prev,
-            ...(data.latitude ? { latitude: data.latitude } : {}),
-            ...(data.longitude ? { longitude: data.longitude } : {}),
-            ...(data.timezone ? { timezone: data.timezone } : {}),
-          }));
-        }
+        setIqamaConfig(normalizeConfig(data.prayer_config));
+        const loc = {
+          latitude: data.latitude || defaultLocation.latitude,
+          longitude: data.longitude || defaultLocation.longitude,
+          timezone: data.timezone || defaultLocation.timezone,
+        };
+        setLocationState(loc);
+        setSavedLocation(loc);
       });
+    // defaultLocation is a constant literal; loading runs once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Load masjid profile from Supabase ────────────────────────────────
   useEffect(() => {
-    const masjidId =
-      sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+    const masjidId = getMasjidId();
     if (!masjidId) return;
     supabaseAdmin
       .from("masjids")
@@ -538,7 +331,7 @@ const Dashboard: React.FC = () => {
       .maybeSingle()
       .then(({ data }) => {
         if (!data) return;
-        const loaded = {
+        const loaded: GeneralSettings = {
           masjidName: data.masjid_name || "",
           address: data.address || "",
           city: data.city || "",
@@ -546,8 +339,9 @@ const Dashboard: React.FC = () => {
           postalCode: data.postal_code || "",
           phone: data.masjid_phone || "",
         };
-        setGeneralSettings(loaded);
-        setSavedGeneralSettings(loaded);
+        setGeneral(loaded);
+        setSavedGeneral(loaded);
+        setProfileLoaded(true);
         if (data.masjid_name) {
           sessionStorage.setItem("masjid_name", data.masjid_name);
           localStorage.setItem("masjid_name", data.masjid_name);
@@ -555,452 +349,392 @@ const Dashboard: React.FC = () => {
       });
   }, []);
 
-  // ── Load events & announcements from Supabase ─────────────────────────
   useEffect(() => {
-    const masjidId =
-      sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
-    if (!masjidId) {
-      setEventsLoading(false);
-      return;
-    }
+    const masjidId = getMasjidId();
+    if (!masjidId) return;
     Promise.all([
-      supabaseAdmin
-        .from("events")
-        .select("*")
-        .eq("masjid_id", masjidId)
-        .order("date", { ascending: true }),
-      supabaseAdmin
-        .from("announcements")
-        .select("*")
-        .eq("masjid_id", masjidId)
-        .order("created_at", { ascending: false }),
+      supabaseAdmin.from("events").select("*").eq("masjid_id", masjidId).order("date", { ascending: true }),
+      supabaseAdmin.from("announcements").select("*").eq("masjid_id", masjidId).order("created_at", { ascending: false }),
     ]).then(([evRes, annRes]) => {
-      if (evRes.data)
-        setEvents(
-          evRes.data.map((r) => ({
-            id: r.id,
-            title: r.title,
-            description: r.description || "",
-            date: r.date,
-            time: r.time || "",
-            endTime: "",
-            category: "",
-          })),
-        );
-      if (annRes.data)
-        setAnnouncements(
-          annRes.data.map((r) => ({
-            id: r.id,
-            title: r.title,
-            body: r.body || "",
-            createdAt: r.created_at || "",
-            expiresAt: r.expires_at || "",
-          })),
-        );
+      if (evRes.data) {
+        setEvents(evRes.data.map(r => ({
+          id: r.id, title: r.title, description: r.description || "", date: r.date, time: r.time || "", endTime: "", category: "",
+        })));
+      }
+      if (annRes.data) {
+        setAnnouncements(annRes.data.map(r => ({
+          id: r.id, title: r.title, body: r.body || "", createdAt: r.created_at || "", expiresAt: r.expires_at || "",
+        })));
+      }
       setEventsLoading(false);
     });
   }, []);
 
-  // ── Handlers ──────────────────────────────────────────────────────────
-  const handleLogout = () => {
-    localStorage.clear();
-    sessionStorage.clear();
-    navigate("/login");
+  // ── Derived ─────────────────────────────────────────────────────────────
+  const todayRow = upcomingRows.find(r => r.date === today);
+  const nextWeek = useMemo(() => upcomingRows.filter(r => r.date >= today).slice(0, 7), [upcomingRows, today]);
+  // Today's rule for each prayer. Trust the saved rules while today's times still follow them;
+  // otherwise describe what the schedule actually does.
+  const rules = useMemo(() => {
+    const out = {} as Record<PrayerKey, IqamaRule | null>;
+    for (const k of PRAYER_KEYS) {
+      const saved = iqamaConfig[k] ? ruleOn(iqamaConfig[k], k, today) : null;
+      out[k] = saved && todayRow && ruleMatches(saved, todayRow, k) ? saved : inferRule(nextWeek, k) ?? (todayRow ? null : saved);
+    }
+    return out;
+  }, [iqamaConfig, todayRow, nextWeek, today]);
+  // Each prayer's usual rule and seasonal periods. Masjids set up before periods existed get
+  // their current rule as the usual one.
+  const prayerConfig = useMemo(() => {
+    const out = {} as Record<PrayerKey, PrayerIqama>;
+    for (const k of PRAYER_KEYS) {
+      out[k] = iqamaConfig[k] ?? { usual: rules[k] ?? defaultRule(k), periods: [] };
+    }
+    return out;
+  }, [iqamaConfig, rules]);
+  const periodsToday = Object.fromEntries(PRAYER_KEYS.map(k => [k, activePeriod(prayerConfig[k], today)])) as Record<PrayerKey, IqamaPeriod | null>;
+  const jummahTimes = extraTimings.jummahSlots.flatMap((on, i) => (on && extraTimings.jummah[i] ? [to12h(extraTimings.jummah[i])] : []));
+  const calcSummary = (() => {
+    const place = general.city || "your masjid's location";
+    if (presets.length > 1) return `${place}, with different settings in different months`;
+    const m = CALC_METHODS.find(c => c.value === presets[0]?.method);
+    const short = m?.label.match(/\(([^)]+)\)/)?.[1] ?? m?.label ?? "your chosen method";
+    return `${place} using the ${short} method`;
+  })();
+
+  // ── Iqama rules ─────────────────────────────────────────────────────────
+  // Saves a prayer's usual rule and periods, then fills in every day from `fromDate` onwards
+  // with whichever rule applies on that day.
+  const applyPrayerConfig = async (key: PrayerKey, cfg: PrayerIqama, fromDate: string) => {
+    const masjidId = getMasjidId();
+    if (!masjidId) throw new Error("Please sign in again.");
+    const { data, error } = await supabaseAdmin
+      .from("prayer_times")
+      .select(`date,${key},${key}_adhan`)
+      .eq("masjid_id", masjidId)
+      .gte("date", fromDate)
+      .order("date", { ascending: true });
+    if (error) throw new Error(error.message);
+    const rows = (data ?? []) as unknown as Record<string, string | null>[];
+    if (rows.length === 0) throw new Error("There are no prayer times from that date yet. Add prayer times first.");
+
+    const wi = extraTimings.weekendIsha;
+    const weekendDay = (iso: string) => ["sun", "", "", "", "", "fri", "sat"][parseISODate(iso).getDay()];
+    const updates = rows.flatMap(r => {
+      const date = r.date as string;
+      const adhan = toMinutes(r[`${key}_adhan`] || r[key]);
+      if (adhan === null) return [];
+      // Keep a weekend Isha override the masjid has set up.
+      if (key === "isha" && wi.iqama && wi.days.includes(weekendDay(date))) return [];
+      return [{ masjid_id: masjidId, date, [`${key}_iqama`]: fmt12(iqamaFromRule(ruleOn(cfg, key, date), adhan)) }];
+    });
+    await upsertInChunks(updates);
+
+    const next = { ...iqamaConfig, [key]: cfg };
+    const { error: cfgError } = await supabaseAdmin
+      .from("prayer_settings")
+      .upsert({ masjid_id: masjidId, prayer_config: next }, { onConflict: "masjid_id" });
+    if (cfgError) throw new Error(cfgError.message);
+    setIqamaConfig(next);
+    await refreshPrayerTimes();
   };
 
-  const handleCloseTutorial = () => {
-    const allTabs = ["overview", "prayer-times", "events", "settings"];
-    localStorage.setItem("tour_seen", "1");
-    localStorage.setItem("seen_tabs", JSON.stringify(allTabs));
-    setSeenTabs(new Set(allTabs));
-    setShowTutorial(false);
+  const applyIqamaRule = async (key: PrayerKey, rule: IqamaRule, fromDate: string) => {
+    await applyPrayerConfig(key, { ...prayerConfig[key], usual: rule }, fromDate);
+    setIqamaEdit(null);
+    const when = fromDate === today ? "from today" : `from ${parseISODate(fromDate).toLocaleDateString("en-US", { weekday: "long", day: "numeric", month: "long" })}`;
+    notify(`${PRAYER_NAMES[key]} iqama updated ${when}. The TV screen and app will show it within a few minutes.`);
   };
 
-  const [presetsSaved, setPresetsSaved] = useState(false);
-  const [presetRegenConfirm, setPresetRegenConfirm] = useState(false);
-  const [regenInProgress, setRegenInProgress] = useState(false);
+  const savePeriod = async (key: PrayerKey, period: IqamaPeriod) => {
+    const cfg = prayerConfig[key];
+    const exists = cfg.periods.some(p => p.id === period.id);
+    const periods = exists ? cfg.periods.map(p => (p.id === period.id ? period : p)) : [...cfg.periods, period];
+    await applyPrayerConfig(key, { ...cfg, periods }, today);
+    setPeriodEdit(null);
+    notify(`${PRAYER_NAMES[key]} iqama for ${describePeriod(period)} saved. The TV screen and app will follow it.`);
+  };
 
-  const doSavePresets = async () => {
-    localStorage.setItem("prayer_presets", JSON.stringify(prayerPresets));
-    localStorage.setItem("month_preset_map", JSON.stringify(monthPresetMap));
-    localStorage.setItem(
-      "prayer_settings_location",
-      JSON.stringify({
-        latitude: prayerSettings.latitude,
-        longitude: prayerSettings.longitude,
-        timezone: prayerSettings.timezone,
-      }),
-    );
-    const masjidId =
-      sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+  const removePeriod = async (key: PrayerKey, period: IqamaPeriod) => {
+    const cfg = prayerConfig[key];
+    await applyPrayerConfig(key, { ...cfg, periods: cfg.periods.filter(p => p.id !== period.id) }, today);
+    setPeriodEdit(null);
+    notify(`${PRAYER_NAMES[key]} iqama for ${describePeriod(period)} removed. Those days use the usual time again.`);
+  };
+
+  // "Change" next to today's iqama edits whatever is in charge today: a period, or the usual rule.
+  const changeTodaysIqama = (key: PrayerKey) => {
+    const p = periodsToday[key];
+    if (p) setPeriodEdit({ prayer: key, period: p });
+    else setIqamaEdit({ prayer: key });
+  };
+
+  const saveDay = async (date: string, patch: Record<string, string | null>) => {
+    const masjidId = getMasjidId();
+    if (!masjidId) throw new Error("Please sign in again.");
+    await upsertInChunks([{ masjid_id: masjidId, date, ...patch }]);
+    await refreshPrayerTimes();
+    setDayEdit(null);
+    notify(`${parseISODate(date).toLocaleDateString("en-US", { weekday: "long", day: "numeric", month: "long" })} is saved.`);
+  };
+
+  const saveJumuah = async (times: string[], slots: [boolean, boolean, boolean]) => {
+    const masjidId = getMasjidId();
+    if (!masjidId) throw new Error("Please sign in again.");
+    const next: Extra = { ...extraTimings, jummah: times, jummahSlots: slots };
+    const { error } = await supabaseAdmin
+      .from("prayer_settings")
+      .upsert({ masjid_id: masjidId, jummah_config: { ...next, jamaatSettings: jamaat } }, { onConflict: "masjid_id" });
+    if (error) throw new Error(error.message);
+    const { data, error: rowsError } = await supabaseAdmin.from("prayer_times").select("date").eq("masjid_id", masjidId).gte("date", today);
+    if (rowsError) throw new Error(rowsError.message);
+    const fridays = ((data ?? []) as { date: string }[]).filter(r => parseISODate(r.date).getDay() === 5);
+    await upsertInChunks(fridays.map(r => ({
+      masjid_id: masjidId,
+      date: r.date,
+      jummah_1: slots[0] ? times[0] : null,
+      jummah_2: slots[1] ? times[1] : null,
+      jummah_3: slots[2] ? times[2] : null,
+    })));
+    setExtraTimings(next);
+    await refreshPrayerTimes();
+    setJumuahOpen(false);
+    notify("Jumu'ah times saved for every Friday from today.");
+  };
+
+  // ── Calculation settings ────────────────────────────────────────────────
+  const savePresets = async () => {
+    const masjidId = getMasjidId();
+    localStorage.setItem("prayer_presets", JSON.stringify(presets));
+    localStorage.setItem("month_preset_map", JSON.stringify(monthMap));
+    localStorage.setItem("prayer_settings_location", JSON.stringify(location));
     if (masjidId) {
-      await supabaseAdmin.from("prayer_settings").upsert(
+      const { error } = await supabaseAdmin.from("prayer_settings").upsert(
         {
           masjid_id: masjidId,
-          presets: prayerPresets,
-          latitude: prayerSettings.latitude,
-          longitude: prayerSettings.longitude,
-          timezone: prayerSettings.timezone,
-          method: prayerPresets[0]?.method ?? "NorthAmerica",
-          jummah_config: { ...extraTimings, jamaatSettings },
+          presets,
+          latitude: location.latitude,
+          longitude: location.longitude,
+          timezone: location.timezone,
+          method: presets[0]?.method ?? "NorthAmerica",
+          jummah_config: { ...extraTimings, jamaatSettings: jamaat },
         },
         { onConflict: "masjid_id" },
       );
+      if (error) throw new Error(error.message);
     }
-    setSavedPrayerPresets(prayerPresets);
-    setSavedMonthPresetMap(monthPresetMap);
-    setPresetsSaved(true);
-    setTimeout(() => setPresetsSaved(false), 3000);
+    setSavedPresets(presets);
+    setSavedMonthMap(monthMap);
+    setSavedLocation(location);
   };
 
-  const handleCancelPresets = () => {
-    setPrayerPresets(savedPrayerPresets);
-    setMonthPresetMap(savedMonthPresetMap);
-  };
-
-  const handleSavePresetsOnly = () => doSavePresets();
-  const hasGeneratedMonths =
-    prayerSource === "backend" && Object.keys(prayerTimesByMonth).length > 0;
-
-  const handleSavePresets = () => {
-    const generatedMonths = Object.keys(prayerTimesByMonth).sort();
-    if (prayerSource === "backend" && generatedMonths.length > 0) {
-      setPresetRegenConfirm(true);
-    } else {
-      doSavePresets();
+  const onSaveCalculation = () => {
+    if (prayerSource === "backend" && Object.keys(prayerTimesByMonth).length > 0) setPresetRegenConfirm(true);
+    else {
+      setSavingCalculation(true);
+      savePresets()
+        .then(() => notify("Settings saved."))
+        .catch(e => notify(`Could not save: ${(e as Error).message}`, "error"))
+        .finally(() => setSavingCalculation(false));
     }
   };
 
-  const handleConfirmPresetRegen = async () => {
+  const saveCalculationAndRecalculate = async (recalculate: boolean) => {
     setPresetRegenConfirm(false);
-    doSavePresets();
-    const masjidId =
-      sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
-    if (!masjidId) return;
-    setRegenInProgress(true);
-    const location = {
-      latitude: prayerSettings.latitude,
-      longitude: prayerSettings.longitude,
-      timezone: prayerSettings.timezone,
-    };
+    setSavingCalculation(true);
     try {
-      const generatedMonths = Object.keys(prayerTimesByMonth).sort();
-      const newGrouped: Record<string, PrayerTime[]> = {
-        ...prayerTimesByMonth,
-      };
-      const allRows: Record<string, string | null>[] = [];
-      for (const monthKey of generatedMonths) {
-        const monthNum = parseInt(monthKey.slice(5, 7));
-        const presetId = monthPresetMap[monthNum];
-        const preset =
-          prayerPresets.find((p) => p.id === presetId) ?? prayerPresets[0];
-        const ps = mergePresetWithLocation(preset, location);
-        const times = generateMonthAdhan(ps, monthKey);
-        const existing = prayerTimesByMonth[monthKey] ?? [];
-        const existingByDate = Object.fromEntries(
-          existing.map((r) => [r.date, r]),
-        );
-        newGrouped[monthKey] = times.map(({ sunrise: _s, ...t }) => {
-          const prev = existingByDate[t.date] ?? {};
-          return { ...prev, ...t } as PrayerTime;
-        });
-        for (const { sunrise: _s, ...t } of times) {
-          const prev = existingByDate[t.date] ?? {};
-          allRows.push({ masjid_id: masjidId, ...prev, ...t });
+      await savePresets();
+      const masjidId = getMasjidId();
+      if (recalculate && masjidId) {
+        setRecalculating(true);
+        const months = Object.keys(prayerTimesByMonth).sort();
+        const rows: Record<string, unknown>[] = [];
+        for (const mk of months) {
+          const preset = presets.find(p => p.id === monthMap[parseInt(mk.slice(5, 7), 10)]) ?? presets[0];
+          const times = generateMonthAdhan(mergePresetWithLocation(preset, location), mk);
+          const existing = Object.fromEntries((prayerTimesByMonth[mk] ?? []).map(r => [r.date, r]));
+          for (const t of times.map(withoutSunrise)) {
+            const prev = existing[t.date] as unknown as Record<string, string> | undefined;
+            // New start times. Adhan keeps any gap the masjid set after the start time,
+            // and iqama keeps its gap after adhan (or its fixed time).
+            const row: Record<string, unknown> = { masjid_id: masjidId, date: t.date };
+            for (const k of PRAYER_KEYS) {
+              const newStart = toMinutes(t[k]);
+              row[k] = t[k];
+              if (newStart === null) continue;
+              const oldStart = toMinutes(prev?.[k]);
+              const oldAdhan = toMinutes(prev?.[`${k}_adhan`] || prev?.[k]);
+              const oldIqama = toMinutes(prev?.[`${k}_iqama`]);
+              const newAdhan = newStart + (oldStart !== null && oldAdhan !== null ? oldAdhan - oldStart : 0);
+              row[`${k}_adhan`] = fmt12(newAdhan);
+              row[`${k}_iqama`] = iqamaConfig[k]
+                ? fmt12(iqamaFromRule(ruleOn(iqamaConfig[k], k, t.date), newAdhan))
+                : fmt12(newAdhan + (oldAdhan !== null && oldIqama !== null ? oldIqama - oldAdhan : k === "maghrib" ? 3 : 30));
+            }
+            rows.push(row);
+          }
         }
+        await upsertInChunks(rows);
+        await refreshPrayerTimes();
+        notify("Settings saved and prayer times updated.");
+      } else {
+        notify("Settings saved. Your existing prayer times were not changed.");
       }
-      for (let i = 0; i < allRows.length; i += 100) {
-        const { error } = await supabaseAdmin
-          .from("prayer_times")
-          .upsert(allRows.slice(i, i + 100), { onConflict: "masjid_id,date" });
-        if (error) throw new Error(error.message);
-      }
-      setPrayerTimesByMonth(newGrouped);
-    } catch (err) {
-      setUploadError("Regen failed: " + (err as Error).message);
+    } catch (e) {
+      notify(`Could not save: ${(e as Error).message}`, "error");
     } finally {
-      setRegenInProgress(false);
+      setSavingCalculation(false);
+      setRecalculating(false);
     }
   };
 
-  const handleSaveSettings = async () => {
-    const masjidId =
-      sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
-    if (!masjidId) {
-      alert("No masjid ID found. Please log in again.");
-      return;
-    }
+  const undoCalculation = () => {
+    setPresets(savedPresets);
+    setMonthMap(savedMonthMap);
+    setLocationState(savedLocation);
+  };
+
+  const addPreset = () => {
+    const base = presets[0] ?? DEFAULT_PRESET;
+    setPresets(prev => [...prev, { ...base, id: crypto.randomUUID(), adjustFajr: "0", adjustSunrise: "0", adjustDhuhr: "0", adjustAsr: "0", adjustMaghrib: "0", adjustIsha: "0" }]);
+  };
+  const deletePreset = (id: string) => {
+    if (presets.length <= 1) return;
+    setPresets(prev => prev.filter(p => p.id !== id));
+    setMonthMap(prev => Object.fromEntries(Object.entries(prev).map(([m, pid]) => [m, pid === id ? "" : pid])) as MonthPresetMap);
+  };
+  const updatePreset = (id: string, patch: Partial<PrayerPreset>) => setPresets(prev => prev.map(p => (p.id === id ? { ...p, ...patch } : p)));
+  const setMonthPreset = (month: number, presetId: string) => setMonthMap(prev => ({ ...prev, [month]: presetId }));
+
+  const setJamaat = async (next: Jamaat) => {
+    const prev = jamaat;
+    setJamaatState(next);
+    const masjidId = getMasjidId();
+    if (!masjidId) return;
+    const { error } = await supabaseAdmin
+      .from("prayer_settings")
+      .upsert({ masjid_id: masjidId, jummah_config: { ...extraTimings, jamaatSettings: next } }, { onConflict: "masjid_id" });
+    if (error) { setJamaatState(prev); notify(`Could not save: ${error.message}`, "error"); }
+    else notify("Saved.");
+  };
+
+  const saveGeneral = async () => {
+    const masjidId = getMasjidId();
+    if (!masjidId) { notify("Please sign in again.", "error"); return; }
     const { error } = await supabaseAdmin
       .from("masjids")
       .update({
-        masjid_name: generalSettings.masjidName,
-        address: generalSettings.address,
-        city: generalSettings.city,
-        province: generalSettings.province,
-        postal_code: generalSettings.postalCode,
-        masjid_phone: generalSettings.phone,
+        masjid_name: general.masjidName,
+        address: general.address,
+        city: general.city,
+        province: general.province,
+        postal_code: general.postalCode,
+        masjid_phone: general.phone,
       })
       .eq("id", masjidId);
-    if (error) {
-      alert("Failed to save: " + error.message);
-      return;
-    }
-    sessionStorage.setItem("masjid_name", generalSettings.masjidName);
-    localStorage.setItem("masjid_name", generalSettings.masjidName);
-    setSavedGeneralSettings(generalSettings);
-    setSettingsSaved(true);
-    setTimeout(() => setSettingsSaved(false), 3000);
+    if (error) { notify(`Could not save: ${error.message}`, "error"); return; }
+    sessionStorage.setItem("masjid_name", general.masjidName);
+    localStorage.setItem("masjid_name", general.masjidName);
+    setSavedGeneral(general);
+    notify("Masjid details saved.");
   };
 
-  const handleBatchApply = async () => {
-    const masjidId =
-      sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
-    if (!masjidId) {
-      setBatchError("No masjid ID found.");
-      return;
-    }
-    if (!batchFrom || !batchTo) {
-      setBatchError("Please select a date range.");
-      return;
-    }
-    if (batchFrom > batchTo) {
-      setBatchError("Start date must be before end date.");
-      return;
-    }
-    setBatchError("");
-    setApplyingBatch(true);
-
-    const upsertRows: Record<string, string | null>[] = [];
-    for (const days of Object.values(prayerTimesByMonth)) {
-      for (const day of days) {
-        if (day.date < batchFrom || day.date > batchTo) continue;
-        const row: Record<string, string | null> = {
-          masjid_id: masjidId,
-          date: day.date,
-        };
-        for (const p of ["fajr", "dhuhr", "asr", "maghrib", "isha"] as const) {
-          const start = day[p] ?? "";
-          const aCell = (batchAdhan as unknown as Record<string, BatchCell>)[p];
-          const iCell = (batchIqama as unknown as Record<string, BatchCell>)[p];
-          const adhanEmpty = aCell.mode === "fixed" && !aCell.fixed;
-          const iqamaEmpty = iCell.mode === "fixed" && !iCell.fixed;
-          const existingAdhan =
-            (day as unknown as Record<string, string>)[`${p}_adhan`] ?? start;
-          const adhanTime = adhanEmpty
-            ? existingAdhan
-            : applyBatchCell(aCell, start);
-          if (!adhanEmpty) row[`${p}_adhan`] = adhanTime;
-          if (!iqamaEmpty) row[`${p}_iqama`] = applyBatchCell(iCell, adhanTime);
+  // ── Generating and importing times ──────────────────────────────────────
+  const buildYearRows = (masjidId: string, year: number) =>
+    Array.from({ length: 12 }, (_, i) => {
+      const preset = presets.find(p => p.id === monthMap[i + 1]) ?? presets[0] ?? DEFAULT_PRESET;
+      return generateMonthAdhan(mergePresetWithLocation(preset, location), `${year}-${String(i + 1).padStart(2, "0")}`);
+    })
+      .flat()
+      .map(withoutSunrise)
+      .map(t => {
+        const row: Record<string, unknown> = { masjid_id: masjidId, ...t, ...addDefaultAdhanIqama(t) };
+        for (const k of PRAYER_KEYS) {
+          const a = toMinutes(t[k]);
+          if (iqamaConfig[k] && a !== null) row[`${k}_iqama`] = fmt12(iqamaFromRule(ruleOn(iqamaConfig[k], k, t.date), a));
         }
-        row.fajr_iqama_2 = jamaatSettings.fajr2
-          ? applyBatchCell(batchIqama2.fajr, row.fajr_iqama as string)
-          : null;
-        row.maghrib_iqama_2 = jamaatSettings.maghrib2
-          ? applyBatchCell(batchIqama2.maghrib, row.maghrib_iqama as string)
-          : null;
-        row.fajr_iqama_3 = jamaatSettings.fajr3
-          ? applyBatchCell(
-              batchIqama3.fajr,
-              (row.fajr_iqama_2 as string) ?? (row.fajr_iqama as string),
-            )
-          : null;
-        row.maghrib_iqama_3 = jamaatSettings.maghrib3
-          ? applyBatchCell(
-              batchIqama3.maghrib,
-              (row.maghrib_iqama_2 as string) ?? (row.maghrib_iqama as string),
-            )
-          : null;
-        const dayOfWeek = new Date(day.date + "T12:00:00").getDay(); // 0=Sun,5=Fri,6=Sat
-        if (dayOfWeek === 5) {
-          row.jummah_1 = extraTimings.jummahSlots[0]
-            ? extraTimings.jummah[0] || null
-            : null;
-          row.jummah_2 = extraTimings.jummahSlots[1]
-            ? extraTimings.jummah[1] || null
-            : null;
-          row.jummah_3 = extraTimings.jummahSlots[2]
-            ? extraTimings.jummah[2] || null
-            : null;
-        }
-        if (extraTimings.weekendIsha.iqama) {
-          const dayName =
-            dayOfWeek === 5
-              ? "fri"
-              : dayOfWeek === 6
-                ? "sat"
-                : dayOfWeek === 0
-                  ? "sun"
-                  : null;
-          if (dayName && extraTimings.weekendIsha.days.includes(dayName)) {
-            row.isha_iqama = extraTimings.weekendIsha.iqama;
-          }
-        }
-        upsertRows.push(row);
-      }
-    }
+        return row;
+      });
 
-    if (upsertRows.length === 0) {
-      setBatchError("No loaded prayer times in that date range.");
-      setApplyingBatch(false);
-      return;
-    }
-
-    for (let i = 0; i < upsertRows.length; i += 100) {
-      const { error } = await supabaseAdmin
-        .from("prayer_times")
-        .upsert(upsertRows.slice(i, i + 100), { onConflict: "masjid_id,date" });
-      if (error) {
-        setBatchError("Save failed: " + error.message);
-        setApplyingBatch(false);
-        return;
-      }
-    }
-
-    setPrayerTimesByMonth((prev) => {
-      const updated = { ...prev };
-      for (const [key, days] of Object.entries(prev)) {
-        updated[key] = days.map((day) => {
-          const match = upsertRows.find((r) => r.date === day.date);
-          return match ? { ...day, ...match } : day;
-        });
-      }
-      return updated;
-    });
-
-    setApplyingBatch(false);
-    setBatchApplied(true);
-    setTimeout(() => setBatchApplied(false), 2500);
-  };
-
-  const handleConfirmSourceSwitch = async () => {
-    if (!pendingSource) return;
-    const newSource = pendingSource;
-    setPendingSource(null);
-    const masjidId =
-      sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
-
-    if (masjidId) {
-      await supabaseAdmin
-        .from("prayer_settings")
-        .upsert(
-          { masjid_id: masjidId, source: newSource },
-          { onConflict: "masjid_id" },
-        );
-    }
-
-    if (newSource === "excel") {
-      if (masjidId)
-        await supabaseAdmin
-          .from("prayer_times")
-          .delete()
-          .eq("masjid_id", masjidId);
-      setPrayerTimesByMonth({});
-      setPrayerSource("excel");
-    } else {
-      setPrayerSource("backend");
-      if (!masjidId) return;
-      setSwitchLoading(true);
-      setUploadError("");
-      try {
-        const year = new Date().getFullYear();
-        const times = generateYearAdhan(prayerSettings, year);
-        const rows = times.map(({ sunrise: _s, ...t }) => ({
-          masjid_id: masjidId,
-          ...t,
-          ...addDefaultAdhanIqama(t),
-        }));
-        for (let i = 0; i < rows.length; i += 100) {
-          const { error } = await supabaseAdmin
-            .from("prayer_times")
-            .upsert(rows.slice(i, i + 100), { onConflict: "masjid_id,date" });
-          if (error) throw new Error(error.message);
-        }
-        const grouped: Record<string, PrayerTime[]> = {};
-        for (const { sunrise: _s, ...row } of times) {
-          const key = row.date.slice(0, 7);
-          if (!grouped[key]) grouped[key] = [];
-          grouped[key].push({
-            ...row,
-            ...addDefaultAdhanIqama(row),
-          } as PrayerTime);
-        }
-        setPrayerTimesByMonth(grouped);
-        originalMonthSnapshot.current = { ...grouped };
-        setUploadSuccess(`Prayer times auto-calculated for all of ${year}.`);
-        setTimeout(() => setUploadSuccess(""), 4000);
-      } catch (err) {
-        setUploadError("Failed to regenerate: " + (err as Error).message);
-      } finally {
-        setSwitchLoading(false);
-      }
-    }
-  };
-
-  const [generatingYear, setGeneratingYear] = useState<number | null>(null);
-
-  const handleGenerateYear = async (year: number) => {
-    const masjidId =
-      sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
+  const generateYear = async (year: number) => {
+    const masjidId = getMasjidId();
     if (!masjidId) return;
     setGeneratingYear(year);
     try {
-      const times = generateYearAdhan(prayerSettings, year);
-      const rows = times.map(({ sunrise: _s, ...t }) => ({
-        masjid_id: masjidId,
-        ...t,
-        ...addDefaultAdhanIqama(t),
-      }));
-      for (let i = 0; i < rows.length; i += 100) {
-        const { error } = await supabaseAdmin
-          .from("prayer_times")
-          .upsert(rows.slice(i, i + 100), { onConflict: "masjid_id,date" });
-        if (error) throw new Error(error.message);
-      }
-      const grouped: Record<string, PrayerTime[]> = {};
-      for (const { sunrise: _s, ...row } of times) {
-        const key = row.date.slice(0, 7);
-        if (!grouped[key]) grouped[key] = [];
-        grouped[key].push({
-          ...row,
-          ...addDefaultAdhanIqama(row),
-        } as PrayerTime);
-      }
-      setPrayerTimesByMonth((prev) => ({ ...prev, ...grouped }));
+      await upsertInChunks(buildYearRows(masjidId, year));
+      await refreshPrayerTimes();
+      notify(`Prayer times for ${year} are ready.`);
     } catch (err) {
-      setUploadError("Failed to generate: " + (err as Error).message);
+      notify(`Could not work out prayer times: ${(err as Error).message}`, "error");
     } finally {
       setGeneratingYear(null);
     }
   };
 
+  const confirmSourceSwitch = async () => {
+    if (!pendingSource) return;
+    const newSource = pendingSource;
+    const masjidId = getMasjidId();
+    setSwitchLoading(true);
+    try {
+      if (masjidId) {
+        const { error } = await supabaseAdmin.from("prayer_settings").upsert({ masjid_id: masjidId, source: newSource }, { onConflict: "masjid_id" });
+        if (error) throw new Error(error.message);
+      }
+      if (newSource === "excel") {
+        if (masjidId) {
+          const { error } = await supabaseAdmin.from("prayer_times").delete().eq("masjid_id", masjidId);
+          if (error) throw new Error(error.message);
+        }
+        setPrayerSource("excel");
+        await refreshPrayerTimes();
+        notify("Automatic times removed. Upload your timetable to add your own.");
+      } else {
+        setPrayerSource("backend");
+        if (masjidId) {
+          const year = new Date().getFullYear();
+          await upsertInChunks(buildYearRows(masjidId, year));
+          await refreshPrayerTimes();
+          notify(`Prayer times are now worked out automatically for ${year}.`);
+        }
+      }
+      setPendingSource(null);
+    } catch (err) {
+      notify(`Could not switch: ${(err as Error).message}`, "error");
+    } finally {
+      setSwitchLoading(false);
+    }
+  };
+
   const autoMapColumns = (headers: string[]) => {
-    const find = (kws: string[]) =>
-      headers.find((h) => kws.some((k) => h.toLowerCase().includes(k))) ?? "";
+    // Keep digits so "Jummah 2" is not mistaken for "Jummah 1".
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const isIqamaLike = (h: string) => {
+      const n = norm(h);
+      return n.includes("iqama") || n.includes("jamat");
+    };
+    const find = (kws: string[], excludeIqama = false) => {
+      const kwsN = kws.map(norm);
+      return headers.find(h => {
+        if (excludeIqama && isIqamaLike(h)) return false;
+        const hn = norm(h);
+        return kwsN.some(k => hn.includes(k));
+      }) ?? "";
+    };
     setColMap({
       date: find(["date"]),
       day: find(["day", "no."]),
-      fajr:
-        find(["fajr begin", "fajr start", "fajr adhan", "fajr azan"]) ||
-        find(["fajr"]),
-      dhuhr:
-        find(["dhuhr begin", "zuhr begin", "dhuhr start", "zuhr start"]) ||
-        find(["dhuhr", "zuhr"]),
-      asr: find(["asr begin", "asr start"]) || find(["asr"]),
-      maghrib:
-        find(["maghrib begin", "maghrib start", "sunset"]) || find(["maghrib"]),
-      isha: find(["isha begin", "isha start"]) || find(["isha"]),
+      fajr: find(["fajr begin", "fajr start", "fajr adhan", "fajr azan"]) || find(["fajr"], true),
+      dhuhr: find(["dhuhr begin", "zuhr begin", "dhuhr start", "zuhr start"]) || find(["dhuhr", "zuhr"], true),
+      asr: find(["asr begin", "asr start"]) || find(["asr"], true),
+      maghrib: find(["maghrib begin", "maghrib start", "sunset"]) || find(["maghrib"], true),
+      isha: find(["isha begin", "isha start"]) || find(["isha"], true),
       fajr_iqama: find(["fajr iqama", "fajr jamat", "fajr jamaat"]),
-      dhuhr_iqama: find([
-        "dhuhr iqama",
-        "zuhr iqama",
-        "dhuhr jamat",
-        "zuhr jamat",
-      ]),
+      dhuhr_iqama: find(["dhuhr iqama", "zuhr iqama", "dhuhr jamat", "zuhr jamat"]),
       asr_iqama: find(["asr iqama", "asr jamat"]),
       maghrib_iqama: find(["maghrib iqama", "maghrib jamat"]),
       isha_iqama: find(["isha iqama", "isha jamat"]),
-      jummah1:
-        find(["jumah 1", "jummah 1", "1st jum"]) || find(["jumah", "jummah"]),
+      jummah1: find(["jumah 1", "jummah 1", "1st jum"]) || find(["jumah", "jummah"]),
       jummah2: find(["jumah 2", "jummah 2", "2nd jum"]),
       jummah3: find(["jumah 3", "jummah 3", "3rd jum"]),
     });
@@ -1009,54 +743,29 @@ const Dashboard: React.FC = () => {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!file.name.endsWith(".xlsx") && !file.name.endsWith(".xls")) {
-      setUploadError("Please upload an Excel file (.xlsx or .xls)");
+    if (!/\.xlsx?$/i.test(file.name)) {
+      setUploadError("Please choose an Excel file (.xlsx or .xls).");
       return;
     }
     setUploadFile(file);
     setUploadError("");
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = ev => {
       try {
         const wb = XLSX.read(ev.target?.result, { type: "binary" });
         const sheetRows: Record<string, string[][]> = {};
         for (const name of wb.SheetNames) {
-          sheetRows[name] = XLSX.utils.sheet_to_json(wb.Sheets[name], {
-            header: 1,
-            raw: false,
-          }) as string[][];
+          sheetRows[name] = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false }) as string[][];
         }
         const firstSheet = wb.SheetNames[0];
         const rows = sheetRows[firstSheet];
-        const keywords = [
-          "fajr",
-          "dhuhr",
-          "zuhr",
-          "asr",
-          "maghrib",
-          "isha",
-          "date",
-          "day",
-        ];
-        const headerIdx = rows.findIndex((r) =>
-          r.some((c) =>
-            keywords.some((k) =>
-              String(c ?? "")
-                .toLowerCase()
-                .includes(k),
-            ),
-          ),
-        );
-        setXlsxPreview({
-          sheets: wb.SheetNames,
-          sheetRows,
-          selectedSheet: firstSheet,
-          headerRowIdx: Math.max(0, headerIdx),
-        });
-        if (headerIdx >= 0)
-          autoMapColumns(rows[headerIdx].map((h) => String(h ?? "").trim()));
-      } catch {
-        setUploadError("Failed to read file.");
+        const keywords = ["fajr", "dhuhr", "zuhr", "asr", "maghrib", "isha", "date", "day"];
+        const headerIdx = rows.findIndex(r => r.some(c => keywords.some(k => String(c ?? "").toLowerCase().includes(k))));
+        setXlsxPreview({ sheets: wb.SheetNames, sheetRows, selectedSheet: firstSheet, headerRowIdx: Math.max(0, headerIdx) });
+        if (headerIdx >= 0) autoMapColumns(rows[headerIdx].map(h => String(h ?? "").trim()));
+      } catch (err) {
+        console.error("Excel parse failed:", err);
+        setUploadError("We could not read that file. Is it an Excel timetable?");
       }
     };
     reader.readAsBinaryString(file);
@@ -1069,17 +778,13 @@ const Dashboard: React.FC = () => {
     setUploadSuccess("");
     try {
       const rows = xlsxPreview.sheetRows[xlsxPreview.selectedSheet];
-      const headers = rows[xlsxPreview.headerRowIdx].map((h) =>
-        String(h ?? "").trim(),
-      );
-      const dataRows = rows
-        .slice(xlsxPreview.headerRowIdx + 1)
-        .filter((r) => r.some((c) => c !== "" && c != null));
-      const ci = (col: string) => (col ? headers.indexOf(col) : -1);
+      const headers = rows[xlsxPreview.headerRowIdx].map(h => String(h ?? "").trim());
+      const dataRows = rows.slice(xlsxPreview.headerRowIdx + 1).filter(r => r.some(c => c !== "" && c != null));
       const cv = (row: string[], col: string) => {
-        const i = ci(col);
+        const i = col ? headers.indexOf(col) : -1;
         return i >= 0 ? String(row[i] ?? "").trim() : "";
       };
+      const importMonth = today.slice(0, 7);
 
       const parsed: PrayerTime[] = [];
       for (const row of dataRows) {
@@ -1088,21 +793,18 @@ const Dashboard: React.FC = () => {
           const raw = cv(row, colMap.date);
           if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
             dateStr = raw;
-          } else if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/.test(raw)) {
-            const parts = raw.split(/[\/\-]/);
+          } else if (/^\d{1,2}[/-]\d{1,2}[/-]\d{4}$/.test(raw)) {
+            const parts = raw.split(/[/-]/);
             dateStr = `${parts[2]}-${parts[0].padStart(2, "0")}-${parts[1].padStart(2, "0")}`;
           } else if (!isNaN(Number(raw)) && Number(raw) > 40000) {
-            const d = new Date(
-              Math.round((Number(raw) - 25569) * 86400 * 1000),
-            );
-            dateStr = d.toISOString().slice(0, 10);
+            // Excel serial dates count days in UTC.
+            dateStr = new Date(Math.round((Number(raw) - 25569) * 86400 * 1000)).toISOString().slice(0, 10);
           } else {
-            const parsed2 = new Date(raw);
-            if (!isNaN(parsed2.getTime()))
-              dateStr = parsed2.toISOString().slice(0, 10);
+            const d = new Date(raw);
+            if (!isNaN(d.getTime())) dateStr = localISODate(d);
           }
         } else if (colMap.day) {
-          const dayNum = parseInt(cv(row, colMap.day));
+          const dayNum = parseInt(cv(row, colMap.day), 10);
           if (!dayNum || isNaN(dayNum)) continue;
           dateStr = `${importMonth}-${String(dayNum).padStart(2, "0")}`;
         }
@@ -1116,871 +818,392 @@ const Dashboard: React.FC = () => {
           maghrib: cv(row, colMap.maghrib),
           isha: cv(row, colMap.isha),
         };
-        if (colMap.fajr_iqama) entry.fajr_iqama = cv(row, colMap.fajr_iqama);
-        if (colMap.dhuhr_iqama) entry.dhuhr_iqama = cv(row, colMap.dhuhr_iqama);
-        if (colMap.asr_iqama) entry.asr_iqama = cv(row, colMap.asr_iqama);
-        if (colMap.maghrib_iqama)
-          entry.maghrib_iqama = cv(row, colMap.maghrib_iqama);
-        if (colMap.isha_iqama) entry.isha_iqama = cv(row, colMap.isha_iqama);
+        for (const k of PRAYER_KEYS) {
+          const col = colMap[`${k}_iqama`];
+          if (col) (entry as unknown as Record<string, string>)[`${k}_iqama`] = cv(row, col);
+        }
         parsed.push(entry);
       }
 
       if (parsed.length === 0) {
-        setUploadError(
-          "No rows could be extracted. Check your column mapping.",
-        );
-        setIsUploading(false);
+        setUploadError("No days could be read. Check that the date column is matched correctly.");
         return;
       }
 
-      const jTimes = [colMap.jummah1, colMap.jummah2, colMap.jummah3]
-        .map((col) => (col ? cv(dataRows[0], col) : ""))
-        .filter(Boolean);
-      if (jTimes.length > 0)
-        setExtraTimings((prev) => ({ ...prev, jummah: jTimes }));
+      const jTimes = [colMap.jummah1, colMap.jummah2, colMap.jummah3].map(col => (col ? cv(dataRows[0], col) : "")).filter(Boolean);
+      if (jTimes.length > 0) setExtraTimings(prev => ({ ...prev, jummah: jTimes }));
 
-      const parsedWithDefaults = parsed.map((row) => ({
-        ...row,
-        ...addDefaultAdhanIqama(row),
-      }));
-      const masjidId =
-        sessionStorage.getItem("masjid_id") ||
-        localStorage.getItem("masjid_id");
-      if (masjidId) {
-        const dbRows = parsedWithDefaults.map((row) => ({
-          masjid_id: masjidId,
-          ...row,
-        }));
-        for (let i = 0; i < dbRows.length; i += 100) {
-          await supabaseAdmin
-            .from("prayer_times")
-            .upsert(dbRows.slice(i, i + 100), { onConflict: "masjid_id,date" });
-        }
-      }
-      const grouped: Record<string, PrayerTime[]> = {};
-      for (const row of parsedWithDefaults) {
-        const key = row.date?.slice(0, 7);
-        if (key) {
-          if (!grouped[key]) grouped[key] = [];
-          grouped[key].push(row as PrayerTime);
-        }
-      }
-      setPrayerTimesByMonth((prev) => ({ ...prev, ...grouped }));
-      const fmtD = (d: string) =>
-        new Date(d + "T12:00:00").toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-        });
-      setUploadSuccess(
-        `${parsed.length} days imported · ${fmtD(parsed[0].date)} – ${fmtD(parsed[parsed.length - 1].date)}`,
-      );
-      setTimeout(() => setUploadSuccess(""), 4000);
+      const masjidId = getMasjidId();
+      if (!masjidId) throw new Error("No masjid selected. Please sign in again.");
+      await upsertInChunks(parsed.map(row => ({ masjid_id: masjidId, ...addDefaultAdhanIqama(row), ...row })));
+      await refreshPrayerTimes();
+      const fmtD = (d: string) => parseISODate(d).toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" });
+      setUploadSuccess(`${parsed.length} days imported, ${fmtD(parsed[0].date)} to ${fmtD(parsed[parsed.length - 1].date)}.`);
+      setTimeout(() => setUploadSuccess(""), 6000);
       setXlsxPreview(null);
       setUploadFile(null);
     } catch (err) {
-      setUploadError("Import failed: " + (err as Error).message);
+      setUploadError(`Import failed: ${(err as Error).message}`);
     } finally {
       setIsUploading(false);
     }
   };
 
-  const handleEditCell = (date: string, field: string, value: string) => {
-    const monthKey = date.slice(0, 7);
-    setPrayerTimesByMonth((prev) => ({
-      ...prev,
-      [monthKey]: prev[monthKey].map((d) =>
-        d.date === date ? { ...d, [field]: value } : d,
-      ),
-    }));
-    setScheduleEdited(true);
-  };
+  // ── Bulk editing ────────────────────────────────────────────────────────
+  const handleBatchApply = async () => {
+    const masjidId = getMasjidId();
+    if (!masjidId) { setBatchError("Please sign in again."); return; }
+    if (!batchFrom || !batchTo) { setBatchError("Please choose a start and end date."); return; }
+    if (batchFrom > batchTo) { setBatchError("The start date must be before the end date."); return; }
+    setBatchError("");
+    setApplyingBatch(true);
 
-  const handleSaveSchedule = async () => {
-    const masjidId =
-      sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
-    if (!masjidId) return;
-    setSavingSchedule(true);
-    const rows = (prayerTimesByMonth[selectedMonth] || []).map((day) => ({
-      masjid_id: masjidId,
-      ...day,
-    }));
-    for (let i = 0; i < rows.length; i += 100) {
-      await supabaseAdmin
-        .from("prayer_times")
-        .upsert(rows.slice(i, i + 100), { onConflict: "masjid_id,date" });
-    }
-    setSavingSchedule(false);
-    setSavedSchedule(true);
-    setScheduleEdited(false);
-    originalMonthSnapshot.current[selectedMonth] = (
-      prayerTimesByMonth[selectedMonth] || []
-    ).map((r) => ({ ...r }));
-    setTimeout(() => setSavedSchedule(false), 2500);
-  };
-
-  const handleDiscardChanges = () => {
-    const snap = originalMonthSnapshot.current[selectedMonth];
-    if (snap)
-      setPrayerTimesByMonth((prev) => ({ ...prev, [selectedMonth]: snap }));
-    setScheduleEdited(false);
-  };
-
-  const handleEventSubmit = async () => {
-    if (!eventForm.title || !eventForm.date || !eventForm.time) {
-      alert("Fill in all required fields");
-      return;
-    }
-    const masjidId =
-      sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
-    const row = {
-      masjid_id: masjidId,
-      title: eventForm.title,
-      description: eventForm.description,
-      date: eventForm.date,
-      time: eventForm.time,
-      location: null,
-    };
-    if (editingEvent) {
-      const { error } = await supabaseAdmin
-        .from("events")
-        .update(row)
-        .eq("id", editingEvent.id);
-      if (error) {
-        alert("Failed to save: " + error.message);
-        return;
-      }
-      setEvents((prev) =>
-        prev.map((e) =>
-          e.id === editingEvent.id ? { ...e, ...eventForm } : e,
-        ),
-      );
-    } else {
-      const { data, error } = await supabaseAdmin
-        .from("events")
-        .insert(row)
-        .select()
-        .single();
-      if (error) {
-        alert("Failed to create: " + error.message);
-        return;
-      }
-      setEvents((prev) => [
-        ...prev,
-        {
-          id: data.id,
-          title: data.title,
-          description: data.description || "",
-          date: data.date,
-          time: data.time || "",
-          endTime: "",
-          category: "",
-        },
-      ]);
-    }
-    setEventsPanel(false);
-    setEventForm({
-      title: "",
-      description: "",
-      date: "",
-      time: "",
-      endTime: "",
-      category: "General",
-    });
-    setEditingEvent(null);
-  };
-
-  const handleDeleteEvent = async (id: string) => {
-    if (!confirm("Delete this event?")) return;
-    const { error } = await supabaseAdmin.from("events").delete().eq("id", id);
-    if (error) {
-      alert("Failed to delete: " + error.message);
-      return;
-    }
-    setEvents((prev) => prev.filter((e) => e.id !== id));
-  };
-
-  const handleEditEvent = (event: Event) => {
-    setEditingEvent(event);
-    setEventForm({
-      title: event.title,
-      description: event.description,
-      date: event.date,
-      time: event.time,
-      endTime: event.endTime || "",
-      category: event.category || "General",
-    });
-    setEventsPanel(true);
-  };
-
-  // ── Nav tabs ──────────────────────────────────────────────────────────
-  const navTabs = [
-    { id: "prayer-times", name: "Prayer Times", ms: "schedule" },
-    { id: "overview", name: "Overview", ms: "dashboard" },
-    { id: "events", name: "Events", ms: "calendar_month" },
-    { id: "settings", name: "Settings", ms: "settings" },
-  ];
-
-  const navH = 56;
-
-  // ─────────────────────────────────────────────────────────────────────
-  return (
-    <div
-      className="dashboard-root"
-      style={{
-        minHeight: "100vh",
-        backgroundColor: "var(--bg)",
-        color: "var(--on-surface)",
-        fontFamily: "Manrope, sans-serif",
-        ...(!animDone
-          ? {
-              opacity: mounted ? 1 : 0,
-              transform: mounted
-                ? "scale(1) translateY(0)"
-                : "scale(1.015) translateY(16px)",
-              transition: "opacity 0.5s ease, transform 0.5s ease",
-            }
-          : {}),
-      }}
-    >
-      {/* ── Top Navigation ── */}
-      <nav
-        style={{
-          position: "fixed",
-          top: 0,
-          width: "100%",
-          background: "var(--nav-bg)",
-          backdropFilter: "blur(20px)",
-          borderBottom: "1px solid var(--outline-subtle)",
-          zIndex: 50,
-          height: navH,
-          display: "flex",
-          alignItems: "center",
-          padding: isMobile ? "0 16px" : "0 24px",
-          gap: 0,
-        }}
-      >
-        {/* Logo */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            flexShrink: 0,
-          }}
-        >
-          <div
-            style={{
-              width: 28,
-              height: 28,
-              background: "var(--surface-mid)",
-              border: "1px solid var(--outline-variant)",
-              borderRadius: 2,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: 15, color: "var(--on-surface)" }}
-            >
-              mosque
-            </span>
-          </div>
-          {!isMobile && (
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: 700,
-                color: "var(--on-surface)",
-              }}
-            >
-              {generalSettings.masjidName}
-            </div>
-          )}
-        </div>
-
-        {/* Tabs — hidden on mobile (bottom bar used instead) */}
-        {!isMobile && (
-          <div
-            data-tour="nav-tabs"
-            style={{
-              flex: 1,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 4,
-            }}
-          >
-            {navTabs.map((tab) => {
-              const isActive = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  data-tour={`tab-${tab.id}`}
-                  onClick={() => setActiveTab(tab.id)}
-                  style={{
-                    position: "relative",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    padding: "0 20px",
-                    height: 56,
-                    background: "transparent",
-                    border: "none",
-                    cursor: "pointer",
-                    fontFamily: "Manrope, sans-serif",
-                    fontSize: 13,
-                  }}
-                >
-                  <span
-                    style={{
-                      color: isActive ? "var(--accent)" : "var(--text-phantom)",
-                      fontWeight: isActive ? 700 : 500,
-                      borderBottom: isActive
-                        ? "2px solid var(--accent)"
-                        : "2px solid transparent",
-                      paddingBottom: 2,
-                      transition: "all 0.12s",
-                      whiteSpace: "nowrap",
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!isActive)
-                        (e.currentTarget as HTMLElement).style.color =
-                          "var(--text-dim)";
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!isActive)
-                        (e.currentTarget as HTMLElement).style.color =
-                          "var(--text-phantom)";
-                    }}
-                  >
-                    {tab.name}
-                  </span>
-                  {!seenTabs.has(tab.id) && !isActive && (
-                    <div style={{
-                      position: "absolute",
-                      top: 11,
-                      right: 10,
-                      width: 6,
-                      height: 6,
-                      borderRadius: "50%",
-                      background: "#34d399",
-                      animation: "beacon-pulse 2s ease-in-out infinite",
-                    }} />
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Right side: tour + theme toggle + sign out */}
-        <div
-          style={{
-            marginLeft: "auto",
-            flexShrink: 0,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-          }}
-        >
-          <button
-            data-tour="tour-btn"
-            onClick={() => setShowTutorial(true)}
-            title="Take the tour"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 32,
-              height: 32,
-              borderRadius: 2,
-              border: "1px solid var(--outline-subtle)",
-              background: "transparent",
-              color: "var(--text-phantom)",
-              cursor: "pointer",
-              transition: "all 0.12s",
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLElement).style.borderColor =
-                "var(--outline-variant)";
-              (e.currentTarget as HTMLElement).style.color = "var(--text-dim)";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.borderColor =
-                "var(--outline-subtle)";
-              (e.currentTarget as HTMLElement).style.color =
-                "var(--text-phantom)";
-            }}
-          >
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: 16 }}
-            >
-              help
-            </span>
-          </button>
-          <button
-            onClick={toggleDarkMode}
-            title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 32,
-              height: 32,
-              borderRadius: 2,
-              border: "1px solid var(--outline-subtle)",
-              background: "transparent",
-              color: "var(--text-phantom)",
-              cursor: "pointer",
-              transition: "all 0.12s",
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLElement).style.borderColor =
-                "var(--outline-variant)";
-              (e.currentTarget as HTMLElement).style.color = "var(--text-dim)";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.borderColor =
-                "var(--outline-subtle)";
-              (e.currentTarget as HTMLElement).style.color =
-                "var(--text-phantom)";
-            }}
-          >
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: 16 }}
-            >
-              {darkMode ? "light_mode" : "dark_mode"}
-            </span>
-          </button>
-          <button
-            onClick={handleLogout}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "6px 12px",
-              borderRadius: 2,
-              border: "1px solid var(--outline-subtle)",
-              background: "transparent",
-              color: "var(--text-phantom)",
-              fontFamily: "Manrope, sans-serif",
-              fontWeight: 600,
-              fontSize: 12,
-              cursor: "pointer",
-              transition: "all 0.12s",
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLElement).style.borderColor =
-                "var(--outline-variant)";
-              (e.currentTarget as HTMLElement).style.color =
-                "var(--text-faint)";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.borderColor =
-                "var(--outline-subtle)";
-              (e.currentTarget as HTMLElement).style.color =
-                "var(--text-phantom)";
-            }}
-          >
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: 14 }}
-            >
-              logout
-            </span>
-            {!isMobile && "Sign out"}
-          </button>
-        </div>
-      </nav>
-
-      {/* ── Bottom Tab Bar (mobile only) ── */}
-      {isMobile && (
-        <nav
-          style={{
-            position: "fixed",
-            bottom: 0,
-            left: 0,
-            right: 0,
-            zIndex: 50,
-            background: "var(--nav-bg)",
-            backdropFilter: "blur(20px)",
-            borderTop: "1px solid var(--outline-subtle)",
-            display: "flex",
-            height: 60,
-            paddingBottom: "env(safe-area-inset-bottom)",
-          }}
-        >
-          {navTabs.map((tab) => {
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 3,
-                  background: "transparent",
-                  border: "none",
-                  cursor: "pointer",
-                  padding: "8px 0",
-                }}
-              >
-                <span
-                  className="material-symbols-outlined"
-                  style={{
-                    fontSize: 22,
-                    color: isActive ? "var(--accent)" : "var(--text-phantom)",
-                  }}
-                >
-                  {tab.ms}
-                </span>
-                <span
-                  style={{
-                    fontSize: 10,
-                    fontWeight: isActive ? 700 : 500,
-                    color: isActive ? "var(--accent)" : "var(--text-phantom)",
-                    fontFamily: "Manrope, sans-serif",
-                  }}
-                >
-                  {tab.name}
-                </span>
-              </button>
-            );
-          })}
-        </nav>
-      )}
-
-      {/* ── Main Content ── */}
-      <div
-        data-tab-content=""
-        style={{
-          paddingTop: navH,
-          paddingBottom: isMobile ? 60 : 0,
-          minHeight: "100vh",
-          overflowX: isMobile ? "hidden" : undefined,
-        }}
-      >
-        {activeTab === "overview" && (
-          <OverviewTab
-            theme={theme}
-            currentTime={currentTime}
-            generalSettings={generalSettings}
-            todayRow={todayRow}
-            events={events}
-            announcements={announcements}
-            prayerTimesByMonth={prayerTimesByMonth}
-            setActiveTab={setActiveTab}
-            setEventsSubTab={setEventsSubTab}
-          />
-        )}
-
-        {activeTab === "prayer-times" && (
-          <PrayerTimesTab
-            theme={theme}
-            todayRow={todayRow}
-            prayerSource={prayerSource}
-            setPendingSource={setPendingSource}
-            pendingSource={pendingSource}
-            prayerLoading={prayerLoading}
-            prayerTimesByMonth={prayerTimesByMonth}
-            selectedMonth={selectedMonth}
-            setSelectedMonth={setSelectedMonth}
-            selectedYear={selectedYear}
-            setSelectedYear={setSelectedYear}
-            months={months}
-            scheduleEdited={scheduleEdited}
-            setScheduleEdited={setScheduleEdited}
-            savingSchedule={savingSchedule}
-            savedSchedule={savedSchedule}
-            switchLoading={switchLoading}
-            uploadFile={uploadFile}
-            uploadSuccess={uploadSuccess}
-            uploadError={uploadError}
-            handleFileChange={handleFileChange}
-            handleSaveSchedule={handleSaveSchedule}
-            handleDiscardChanges={handleDiscardChanges}
-            handleEditCell={handleEditCell}
-            handleConfirmSourceSwitch={handleConfirmSourceSwitch}
-            batchFrom={batchFrom}
-            setBatchFrom={setBatchFrom}
-            batchTo={batchTo}
-            setBatchTo={setBatchTo}
-            batchAdhan={batchAdhan}
-            setBatchAdhan={setBatchAdhan}
-            batchIqama={batchIqama}
-            setBatchIqama={setBatchIqama}
-            batchIqama2={batchIqama2}
-            setBatchIqama2={setBatchIqama2}
-            batchIqama3={batchIqama3}
-            setBatchIqama3={setBatchIqama3}
-            applyingBatch={applyingBatch}
-            batchApplied={batchApplied}
-            batchError={batchError}
-            handleBatchApply={handleBatchApply}
-            jamaatSettings={jamaatSettings}
-            extraTimings={extraTimings}
-            setExtraTimings={setExtraTimings}
-            xlsxPreview={xlsxPreview}
-            setXlsxPreview={setXlsxPreview}
-            colMap={colMap}
-            setColMap={setColMap}
-            autoMapColumns={autoMapColumns}
-            handleConfirmImport={handleConfirmImport}
-            isUploading={isUploading}
-            handleGenerateYear={handleGenerateYear}
-            generatingYear={generatingYear}
-          />
-        )}
-
-        {activeTab === "events" && (
-          <EventsTab
-            theme={theme}
-            events={events}
-            setEvents={setEvents}
-            eventsLoading={eventsLoading}
-            eventsSubTab={eventsSubTab}
-            setEventsSubTab={setEventsSubTab}
-            announcements={announcements}
-            setAnnouncements={setAnnouncements}
-            editingEvent={editingEvent}
-            setEditingEvent={setEditingEvent}
-            editingAnnouncement={editingAnnouncement}
-            setEditingAnnouncement={setEditingAnnouncement}
-            announcementForm={announcementForm}
-            setAnnouncementForm={setAnnouncementForm}
-            eventForm={eventForm}
-            setEventForm={setEventForm}
-            eventsPanel={eventsPanel}
-            setEventsPanel={setEventsPanel}
-            handleEventSubmit={handleEventSubmit}
-            handleDeleteEvent={handleDeleteEvent}
-            handleEditEvent={handleEditEvent}
-          />
-        )}
-
-        {activeTab === "settings" && (
-          <SettingsTab
-            theme={theme}
-            settingsTab={settingsTab}
-            setSettingsTab={setSettingsTab}
-            registeredEmail={registeredEmail}
-            generalSettings={generalSettings}
-            setGeneralSettings={setGeneralSettings}
-            settingsSaved={settingsSaved}
-            savedGeneralSettings={savedGeneralSettings}
-            handleSaveSettings={handleSaveSettings}
-            prayerSettings={prayerSettings}
-            setPrayerSettings={setPrayerSettings}
-            jamaatSettings={jamaatSettings}
-            setJamaatSettings={setJamaatSettings}
-            prayerPresets={prayerPresets}
-            monthPresetMap={monthPresetMap}
-            handleAddPreset={handleAddPreset}
-            handleDeletePreset={handleDeletePreset}
-            handleUpdatePreset={handleUpdatePreset}
-            handleSetMonthPreset={handleSetMonthPreset}
-            handleSavePresets={handleSavePresets}
-            presetsSaved={presetsSaved}
-            savedPrayerPresets={savedPrayerPresets}
-            savedMonthPresetMap={savedMonthPresetMap}
-            handleCancelPresets={handleCancelPresets}
-            handleSavePresetsOnly={handleSavePresetsOnly}
-            handleSavePresetsAndRegen={handleConfirmPresetRegen}
-            hasGeneratedMonths={hasGeneratedMonths}
-            extraTimings={extraTimings}
-            setExtraTimings={setExtraTimings}
-          />
-        )}
-      </div>
-
-      {/* ── Preset regen confirmation modal ── */}
-      {presetRegenConfirm &&
-        (() => {
-          const generatedMonths = Object.keys(prayerTimesByMonth).sort();
-          const first = generatedMonths[0];
-          const last = generatedMonths[generatedMonths.length - 1];
-          const fmt = (m: string) =>
-            new Date(m + "-01T12:00:00").toLocaleDateString("en-US", {
-              month: "long",
-              year: "numeric",
-            });
-          return (
-            <div
-              style={{
-                position: "fixed",
-                inset: 0,
-                zIndex: 60,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                padding: 16,
-                backdropFilter: "blur(4px)",
-                backgroundColor: "rgba(0,0,0,0.8)",
-              }}
-            >
-              <div
-                style={{
-                  width: "100%",
-                  maxWidth: 380,
-                  background: "#111111",
-                  border: "1px solid #2a2a2a",
-                  borderRadius: 2,
-                  overflow: "hidden",
-                }}
-              >
-                <div
-                  style={{
-                    padding: "24px 24px 20px",
-                    borderBottom: "1px solid #1a1a1a",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 36,
-                      height: 36,
-                      background: "#1a1a1a",
-                      border: "1px solid #2a2a2a",
-                      borderRadius: 2,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      marginBottom: 16,
-                    }}
-                  >
-                    <span
-                      className="material-symbols-outlined"
-                      style={{ fontSize: 18, color: "#c6c6c7" }}
-                    >
-                      refresh
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 15,
-                      fontWeight: 700,
-                      color: "#c6c6c7",
-                      marginBottom: 8,
-                    }}
-                  >
-                    Regenerate prayer times?
-                  </div>
-                  <div
-                    style={{ fontSize: 13, color: "#5a5a5a", lineHeight: 1.6 }}
-                  >
-                    This will recalculate adhan times for{" "}
-                    <strong style={{ color: "#acabaa" }}>
-                      {generatedMonths.length} month
-                      {generatedMonths.length !== 1 ? "s" : ""}
-                    </strong>{" "}
-                    ({fmt(first)} – {fmt(last)}) using the new preset settings.
-                    Iqama times will be preserved.
-                  </div>
-                </div>
-                <div style={{ padding: "16px 24px", display: "flex", gap: 10 }}>
-                  <button
-                    onClick={() => {
-                      setPresetRegenConfirm(false);
-                      doSavePresets();
-                    }}
-                    style={{
-                      flex: 1,
-                      padding: "10px",
-                      background: "#1a1a1a",
-                      border: "1px solid #2a2a2a",
-                      borderRadius: 2,
-                      color: "#acabaa",
-                      fontFamily: "Manrope, sans-serif",
-                      fontWeight: 600,
-                      fontSize: 13,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Save only
-                  </button>
-                  <button
-                    onClick={handleConfirmPresetRegen}
-                    style={{
-                      flex: 1,
-                      padding: "10px",
-                      background: "#c6c6c7",
-                      border: "1px solid #c6c6c7",
-                      borderRadius: 2,
-                      color: "#0e0e0e",
-                      fontFamily: "Manrope, sans-serif",
-                      fontWeight: 700,
-                      fontSize: 13,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Save &amp; Regenerate
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
-
-      {/* ── Regen in progress overlay ── */}
-      {regenInProgress && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 60,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            backdropFilter: "blur(4px)",
-            backgroundColor: "rgba(0,0,0,0.7)",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: 14,
-            }}
-          >
-            <span
-              className="material-symbols-outlined"
-              style={{
-                fontSize: 32,
-                color: "#c6c6c7",
-                animation: "spin 1s linear infinite",
-              }}
-            >
-              progress_activity
-            </span>
-            <div style={{ color: "#acabaa", fontWeight: 600, fontSize: 13 }}>
-              Regenerating prayer times…
-            </div>
-          </div>
-        </div>
-      )}
-      <style>{`
-        @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes beacon-pulse {
-          0%   { box-shadow: 0 0 0 0 rgba(52,211,153,0.7); }
-          70%  { box-shadow: 0 0 0 6px rgba(52,211,153,0); }
-          100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+    const upsertRows: Record<string, string | null>[] = [];
+    for (const days of Object.values(prayerTimesByMonth)) {
+      for (const day of days) {
+        if (day.date < batchFrom || day.date > batchTo) continue;
+        const row: Record<string, string | null> = { masjid_id: masjidId, date: day.date };
+        for (const p of PRAYER_KEYS) {
+          const start = day[p] ?? "";
+          const aCell = (batchAdhan as unknown as Record<string, BatchCell>)[p];
+          const iCell = (batchIqama as unknown as Record<string, BatchCell>)[p];
+          const adhanEmpty = aCell.mode === "fixed" && !aCell.fixed;
+          const iqamaEmpty = iCell.mode === "fixed" && !iCell.fixed;
+          const existingAdhan = (day as unknown as Record<string, string>)[`${p}_adhan`] ?? start;
+          const adhanTime = adhanEmpty ? existingAdhan : applyBatchCell(aCell, start);
+          if (!adhanEmpty) row[`${p}_adhan`] = adhanTime;
+          if (!iqamaEmpty) row[`${p}_iqama`] = applyBatchCell(iCell, adhanTime);
         }
-      `}</style>
+        const baseIqama = (p: "fajr" | "maghrib") => (row[`${p}_iqama`] as string) ?? (day as unknown as Record<string, string>)[`${p}_iqama`];
+        row.fajr_iqama_2 = jamaat.fajr2 ? applyBatchCell(batchIqama2.fajr, baseIqama("fajr")) : null;
+        row.maghrib_iqama_2 = jamaat.maghrib2 ? applyBatchCell(batchIqama2.maghrib, baseIqama("maghrib")) : null;
+        row.fajr_iqama_3 = jamaat.fajr3 ? applyBatchCell(batchIqama3.fajr, row.fajr_iqama_2 ?? baseIqama("fajr")) : null;
+        row.maghrib_iqama_3 = jamaat.maghrib3 ? applyBatchCell(batchIqama3.maghrib, row.maghrib_iqama_2 ?? baseIqama("maghrib")) : null;
+        const dow = parseISODate(day.date).getDay();
+        if (dow === 5) {
+          row.jummah_1 = extraTimings.jummahSlots[0] ? extraTimings.jummah[0] || null : null;
+          row.jummah_2 = extraTimings.jummahSlots[1] ? extraTimings.jummah[1] || null : null;
+          row.jummah_3 = extraTimings.jummahSlots[2] ? extraTimings.jummah[2] || null : null;
+        }
+        if (extraTimings.weekendIsha.iqama) {
+          const dayName = dow === 5 ? "fri" : dow === 6 ? "sat" : dow === 0 ? "sun" : null;
+          if (dayName && extraTimings.weekendIsha.days.includes(dayName)) row.isha_iqama = extraTimings.weekendIsha.iqama;
+        }
+        upsertRows.push(row);
+      }
+    }
 
-      {/* ── Tutorial overlay ── */}
-      {showTutorial && (
-        <TutorialOverlay onClose={handleCloseTutorial} setActiveTab={setActiveTab} />
+    if (upsertRows.length === 0) {
+      setBatchError("There are no prayer times loaded for those dates.");
+      setApplyingBatch(false);
+      return;
+    }
+    try {
+      await upsertInChunks(upsertRows);
+      const masjidIdForCfg = getMasjidId();
+      if (masjidIdForCfg) {
+        await supabaseAdmin.from("prayer_settings").upsert(
+          { masjid_id: masjidIdForCfg, jummah_config: { ...extraTimings, jamaatSettings: jamaat } },
+          { onConflict: "masjid_id" },
+        );
+      }
+      await refreshPrayerTimes();
+      setBatchApplied(true);
+      setTimeout(() => setBatchApplied(false), 2500);
+      notify(`${upsertRows.length} days updated.`);
+    } catch (err) {
+      setBatchError(`Could not save: ${(err as Error).message}`);
+    } finally {
+      setApplyingBatch(false);
+    }
+  };
+
+  // ── Events & announcements ──────────────────────────────────────────────
+  const saveEvent = async (input: EventInput, id?: string) => {
+    const masjidId = getMasjidId();
+    if (!masjidId) throw new Error("Please sign in again.");
+    const row = { masjid_id: masjidId, title: input.title, description: input.description, date: input.date, time: input.time, location: null };
+    if (id) {
+      const { error } = await supabaseAdmin.from("events").update(row).eq("id", id);
+      if (error) throw new Error(error.message);
+      setEvents(prev => prev.map(e => (e.id === id ? { ...e, ...input } : e)));
+      notify("Event saved.");
+    } else {
+      const { data, error } = await supabaseAdmin.from("events").insert(row).select().single();
+      if (error) throw new Error(error.message);
+      setEvents(prev => [...prev, { id: data.id, title: data.title, description: data.description || "", date: data.date, time: data.time || "", endTime: "", category: "" }]);
+      notify("Event added. It now shows on the TV screen and in the app.");
+    }
+    setComposer(null);
+  };
+
+  const deleteEvent = async (id: string) => {
+    const { error } = await supabaseAdmin.from("events").delete().eq("id", id);
+    if (error) { notify(`Could not delete: ${error.message}`, "error"); return; }
+    setEvents(prev => prev.filter(e => e.id !== id));
+    notify("Event deleted.");
+  };
+
+  const saveAnnouncement = async (input: AnnouncementInput, id?: string) => {
+    const masjidId = getMasjidId();
+    if (!masjidId) throw new Error("Please sign in again.");
+    const row = { masjid_id: masjidId, title: input.title, body: input.body, expires_at: input.expiresAt };
+    if (id) {
+      const { error } = await supabaseAdmin.from("announcements").update(row).eq("id", id);
+      if (error) throw new Error(error.message);
+      setAnnouncements(prev => prev.map(a => (a.id === id ? { ...a, title: input.title, body: input.body, expiresAt: input.expiresAt ?? "" } : a)));
+      notify("Announcement saved.");
+    } else {
+      const { data, error } = await supabaseAdmin.from("announcements").insert(row).select().single();
+      if (error) throw new Error(error.message);
+      setAnnouncements(prev => [{ id: data.id, title: data.title, body: data.body || "", createdAt: data.created_at || new Date().toISOString(), expiresAt: data.expires_at || "" }, ...prev]);
+      notify("Posted. It now shows on the TV screen and in the app.");
+    }
+    setComposer(null);
+  };
+
+  const deleteAnnouncement = async (id: string) => {
+    const { error } = await supabaseAdmin.from("announcements").delete().eq("id", id);
+    if (error) { notify(`Could not remove: ${error.message}`, "error"); return; }
+    setAnnouncements(prev => prev.filter(a => a.id !== id));
+    notify("Announcement removed.");
+  };
+
+  const openComposer = (c: NonNullable<Composer>) => {
+    setEventsView(c.kind === "event" ? "events" : "announcements");
+    setComposer(c);
+    goTab("events");
+  };
+
+  const signOut = () => {
+    localStorage.clear();
+    sessionStorage.clear();
+    navigate("/login");
+  };
+  const openTv = () => window.open("/home/tvscreen", "_blank", "noopener");
+
+  // ── Render ──────────────────────────────────────────────────────────────
+  const adhanToday = (k: PrayerKey) => toMinutes(adhanOf(todayRow, k));
+
+  return (
+    <DashboardShell
+      masjidName={general.masjidName || "Your masjid"}
+      activeTab={activeTab}
+      onNavigate={goTab}
+      dark={dark}
+      onToggleTheme={toggleTheme}
+      onOpenTv={openTv}
+      onHelp={() => setShowTutorial(true)}
+      onSignOut={signOut}
+    >
+      {activeTab === "overview" && (
+        <HomeTab
+          masjidName={general.masjidName || "your masjid"}
+          now={now}
+          todayRow={todayRow}
+          tomorrowRow={upcomingRows.find(r => r.date === addDaysISO(today, 1))}
+          rules={rules}
+          jummahTimes={jummahTimes}
+          scheduleEnd={scheduleEnd}
+          scheduleLoading={scheduleLoading}
+          phoneMissing={profileLoaded && !savedGeneral.phone}
+          events={events}
+          announcements={announcements}
+          periodsToday={periodsToday}
+          onChangeIqama={changeTodaysIqama}
+          onGoPrayerTimes={() => goTab("prayer-times")}
+          onGoSettings={() => goTab("settings")}
+          onNewAnnouncement={() => openComposer({ kind: "announcement" })}
+          onNewEvent={() => openComposer({ kind: "event" })}
+          onSeeAnnouncements={() => { setEventsView("announcements"); goTab("events"); }}
+          onSeeEvents={() => { setEventsView("events"); goTab("events"); }}
+          onEditAnnouncement={a => openComposer({ kind: "announcement", item: a })}
+          onOpenTv={openTv}
+        />
       )}
-    </div>
+
+      {activeTab === "prayer-times" && (
+        <PrayerTimesTab
+          now={now}
+          upcomingRows={upcomingRows}
+          config={prayerConfig}
+          periodsToday={periodsToday}
+          onChangeIqama={k => setIqamaEdit({ prayer: k })}
+          onAddPeriod={k => setPeriodEdit({ prayer: k })}
+          onEditPeriod={(k, p) => setPeriodEdit({ prayer: k, period: p })}
+          jummahTimes={jummahTimes}
+          onEditJumuah={() => setJumuahOpen(true)}
+          prayerSource={prayerSource}
+          calcSummary={calcSummary}
+          onRequestSourceSwitch={setPendingSource}
+          onGoSettings={() => goTab("settings")}
+          prayerLoading={prayerLoading}
+          prayerTimesByMonth={prayerTimesByMonth}
+          selectedMonth={selectedMonth}
+          setSelectedMonth={setSelectedMonth}
+          selectedYear={selectedYear}
+          setSelectedYear={setSelectedYear}
+          jamaat={jamaat}
+          onEditDay={setDayEdit}
+          onOpenBulk={() => { setBatchError(""); setBulkOpen(true); }}
+          onFileChosen={handleFileChange}
+          uploadSuccess={uploadSuccess}
+          uploadError={xlsxPreview ? "" : uploadError}
+          onGenerateYear={generateYear}
+          generatingYear={generatingYear}
+        />
+      )}
+
+      {activeTab === "events" && (
+        <EventsTab
+          now={now}
+          view={eventsView}
+          setView={setEventsView}
+          events={events}
+          announcements={announcements}
+          loading={eventsLoading}
+          composer={composer}
+          setComposer={setComposer}
+          onSaveEvent={saveEvent}
+          onDeleteEvent={deleteEvent}
+          onSaveAnnouncement={saveAnnouncement}
+          onDeleteAnnouncement={deleteAnnouncement}
+        />
+      )}
+
+      {activeTab === "settings" && (
+        <SettingsTab
+          dark={dark}
+          registeredEmail={registeredEmail}
+          general={general}
+          setGeneral={setGeneral}
+          savedGeneral={savedGeneral}
+          onSaveGeneral={saveGeneral}
+          location={location}
+          setLocation={setLocation}
+          savedLocation={savedLocation}
+          presets={presets}
+          monthMap={monthMap}
+          savedPresets={savedPresets}
+          savedMonthMap={savedMonthMap}
+          onUpdatePreset={updatePreset}
+          onAddPreset={addPreset}
+          onDeletePreset={deletePreset}
+          onSetMonthPreset={setMonthPreset}
+          onSaveCalculation={onSaveCalculation}
+          onUndoCalculation={undoCalculation}
+          savingCalculation={savingCalculation}
+          jamaat={jamaat}
+          onSetJamaat={setJamaat}
+        />
+      )}
+
+      {iqamaEdit && (
+        <IqamaEditor
+          prayer={iqamaEdit.prayer}
+          rules={Object.fromEntries(PRAYER_KEYS.map(k => [k, prayerConfig[k].usual])) as Record<PrayerKey, IqamaRule>}
+          todayAdhan={adhanToday}
+          defaultStart={iqamaEdit.prayer ? "today" : "date"}
+          periods={iqamaEdit.prayer ? prayerConfig[iqamaEdit.prayer].periods : []}
+          onSave={applyIqamaRule}
+          onClose={() => setIqamaEdit(null)}
+        />
+      )}
+      {periodEdit && (
+        <PeriodEditor
+          prayer={periodEdit.prayer}
+          period={periodEdit.period}
+          usual={k => prayerConfig[k].usual}
+          onSave={savePeriod}
+          onRemove={periodEdit.period && periodEdit.prayer ? () => removePeriod(periodEdit.prayer!, periodEdit.period!) : undefined}
+          onClose={() => setPeriodEdit(null)}
+        />
+      )}
+      {dayEdit && (
+        <DayEditor day={dayEdit} jamaat={jamaat} jummahSlots={extraTimings.jummahSlots} onSave={saveDay} onClose={() => setDayEdit(null)} />
+      )}
+      {jumuahOpen && (
+        <JumuahEditor times={extraTimings.jummah} slots={extraTimings.jummahSlots} onSave={saveJumuah} onClose={() => setJumuahOpen(false)} />
+      )}
+      {bulkOpen && (
+        <BulkEditor
+          prayerTimesByMonth={prayerTimesByMonth}
+          from={batchFrom} setFrom={setBatchFrom}
+          to={batchTo} setTo={setBatchTo}
+          adhan={batchAdhan} setAdhan={setBatchAdhan}
+          iqama={batchIqama} setIqama={setBatchIqama}
+          iqama2={batchIqama2} setIqama2={setBatchIqama2}
+          iqama3={batchIqama3} setIqama3={setBatchIqama3}
+          jamaat={jamaat}
+          extra={extraTimings}
+          setExtra={setExtraTimings}
+          applying={applyingBatch}
+          applied={batchApplied}
+          error={batchError}
+          onApply={handleBatchApply}
+          onClose={() => setBulkOpen(false)}
+        />
+      )}
+      {xlsxPreview && (
+        <ExcelImportModal
+          fileName={uploadFile?.name ?? "your file"}
+          preview={xlsxPreview}
+          setPreview={setXlsxPreview}
+          colMap={colMap}
+          setColMap={setColMap}
+          autoMapColumns={autoMapColumns}
+          onImport={handleConfirmImport}
+          importing={isUploading}
+          error={uploadError}
+        />
+      )}
+      {pendingSource && (
+        <ConfirmDialog
+          title={pendingSource === "excel" ? "Use only your own timetable?" : "Work out adhan times automatically?"}
+          body={pendingSource === "excel" ? (
+            <>
+              <strong style={{ color: "var(--d-danger)" }}>All prayer times will be deleted</strong>, including iqama times you have set.
+              You will need to upload your timetable to add them back.
+            </>
+          ) : (
+            <>
+              Adhan times for {new Date().getFullYear()} will be worked out for {general.city || "your masjid's location"} and will
+              replace the times from your uploaded timetable. Iqama times go back to 30 minutes after adhan (3 minutes for Maghrib).
+            </>
+          )}
+          confirmLabel={pendingSource === "excel" ? "Delete and switch" : "Switch to automatic times"}
+          danger={pendingSource === "excel"}
+          busy={switchLoading}
+          onConfirm={confirmSourceSwitch}
+          onCancel={() => setPendingSource(null)}
+        />
+      )}
+      {presetRegenConfirm && (
+        <Modal
+          title="Update your prayer times too?"
+          onClose={() => setPresetRegenConfirm(false)}
+          footer={
+            <>
+              <button type="button" className="d-btn d-btn--secondary" onClick={() => saveCalculationAndRecalculate(false)}>Only save the settings</button>
+              <button type="button" className="d-btn d-btn--primary" onClick={() => saveCalculationAndRecalculate(true)}>Save and update prayer times</button>
+            </>
+          }
+        >
+          <p style={{ margin: 0, fontSize: 18, lineHeight: 1.55 }}>
+            You already have prayer times for {Object.keys(prayerTimesByMonth).length} month{Object.keys(prayerTimesByMonth).length === 1 ? "" : "s"} of {selectedYear}.
+            We can work out their adhan times again with the new settings. Iqama times keep the same gap after adhan.
+          </p>
+        </Modal>
+      )}
+      {recalculating && (
+        <div className="d-overlay" style={{ alignItems: "center" }} aria-live="polite">
+          <div className="d-card d-card-pad d-row" style={{ gap: 14 }}><Spinner /><span className="d-strong">Saving and updating prayer times…</span></div>
+        </div>
+      )}
+
+      <Toast toast={toast} />
+      {showTutorial && <TutorialOverlay onClose={closeTutorial} setActiveTab={t => goTab(t as DashboardTab)} />}
+    </DashboardShell>
   );
 };
 

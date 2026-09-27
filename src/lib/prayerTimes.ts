@@ -106,7 +106,7 @@ function tzOffset(timezone: string, date: Date): number {
 function toHHMM(h: number): string {
   h = fixHour(h);
   const hh = Math.floor(h);
-  let mm = Math.round((h - hh) * 60);
+  const mm = Math.round((h - hh) * 60);
   if (mm === 60) return toHHMM(hh + 1);
   return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }

@@ -1,23 +1,41 @@
 import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import useIsMobile from "../hooks/useIsMobile";
+import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { Icon, Spinner } from "../dashboard/ui";
+import { useDashTheme } from "../dashboard/theme";
+import PublicHeader from "./PublicHeader";
+import "./PublicPages.css";
 
-const inp: React.CSSProperties = {
-  width: "100%", padding: "10px 12px", background: "var(--surface-low)",
-  border: "1px solid var(--outline-variant)", borderRadius: 2, color: "var(--on-surface)",
-  fontFamily: "Manrope, sans-serif", fontSize: 13, fontWeight: 500,
-  outline: "none", transition: "border-color 0.15s", boxSizing: "border-box",
-};
+interface FieldProps {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  type?: "text" | "email" | "tel";
+  placeholder?: string;
+  autoComplete?: string;
+  required?: boolean;
+  help?: string;
+}
 
-const lbl: React.CSSProperties = {
-  display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-faint)",
-  marginBottom: 6, letterSpacing: "0.02em",
-};
+const Field: React.FC<FieldProps> = ({ id, label, value, onChange, type = "text", placeholder, autoComplete, required, help }) => (
+  <div className="d-field">
+    <label className="d-label" htmlFor={id}>
+      {label}
+      {!required && <span className="pub-optional"> (optional)</span>}
+    </label>
+    <input
+      id={id} className="d-input" type={type} value={value} onChange={onChange}
+      placeholder={placeholder} autoComplete={autoComplete} aria-required={required || undefined}
+      aria-describedby={help ? `${id}-help` : undefined}
+    />
+    {help && <p id={`${id}-help`} className="d-help">{help}</p>}
+  </div>
+);
 
 const SignupPage: React.FC = () => {
   const navigate = useNavigate();
-  const isMobile = useIsMobile();
+  const { dark, toggle, themeAttr } = useDashTheme();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [error, setError] = useState("");
@@ -30,7 +48,7 @@ const SignupPage: React.FC = () => {
   useEffect(() => {
     const token = localStorage.getItem("access_token") || sessionStorage.getItem("access_token");
     if (token) navigate("/home", { replace: true });
-  }, []);
+  }, [navigate]);
 
   const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData(p => ({ ...p, [field]: e.target.value }));
@@ -39,7 +57,7 @@ const SignupPage: React.FC = () => {
 
   const handleSubmit = async () => {
     if (!formData.masjidName || !formData.masjidEmail || !formData.inchargeName) {
-      setError("Please fill in all required fields");
+      setError("Please fill in the masjid name, masjid email and your full name.");
       return;
     }
     setIsSubmitting(true);
@@ -55,168 +73,124 @@ const SignupPage: React.FC = () => {
       if (dbError) throw new Error(dbError.message);
       setIsSuccess(true);
     } catch (err: unknown) {
-      setError((err as Error).message || "Failed to submit. Please try again.");
+      setError((err as Error).message || "We could not send your request. Please check your connection and try again.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const header = (
+    <PublicHeader dark={dark} onToggleTheme={toggle}>
+      <Link to="/login" className="d-btn d-btn--secondary d-btn--sm">
+        <span className="pub-hide-mobile">Already registered? Sign in</span>
+        <span className="d-only-mobile">Sign in</span>
+      </Link>
+    </PublicHeader>
+  );
+
   if (isSuccess) {
     return (
-      <div style={{ minHeight: "100vh", backgroundColor: "var(--bg)", color: "var(--on-surface)", fontFamily: "Manrope, sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-        <div style={{ maxWidth: 480, textAlign: "center" }}>
-          <div style={{ width: 56, height: 56, background: "var(--surface-mid)", border: "1px solid var(--outline-variant)", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 24px" }}>
-            <span className="material-symbols-outlined" style={{ fontSize: 28, color: "var(--on-surface)" }}>check</span>
+      <div className="dash" data-dash-theme={themeAttr}>
+        <a href="#main" className="d-sr-only">Skip to content</a>
+        {header}
+        <main id="main" className="pub-auth">
+          <div className="pub-auth-inner pub-auth-inner--mid">
+            <div className="d-card nf-card" role="status">
+              <div className="pub-icon-chip pub-icon-chip--success"><Icon name="check_circle" /></div>
+              <h1 className="d-h1">Thank you, we have your request</h1>
+              <p className="d-sub">
+                Our team will review your masjid's details. Once it is approved, we will email your sign-in details to the masjid's email address.
+              </p>
+              <div className="lp-actions">
+                <button type="button" className="d-btn d-btn--secondary" onClick={() => setIsSuccess(false)}>
+                  Register another masjid
+                </button>
+                <button type="button" className="d-btn d-btn--primary" onClick={() => navigate("/login")}>
+                  Go to sign in
+                </button>
+              </div>
+            </div>
           </div>
-          <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.03em", marginBottom: 12, color: "var(--on-surface)" }}>Request Submitted</h1>
-          <p style={{ fontSize: 14, color: "var(--text-ghost)", lineHeight: 1.65, marginBottom: 32 }}>
-            Your registration is pending review. Once approved, you'll receive login credentials via email.
-          </p>
-          <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
-            <button onClick={() => setIsSuccess(false)} style={{ padding: "10px 20px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, color: "var(--on-surface-variant)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
-              Submit Another
-            </button>
-            <button onClick={() => navigate("/login")} style={{ padding: "10px 20px", background: "var(--on-surface)", border: "1px solid var(--on-surface)", borderRadius: 2, color: "var(--accent-text)", fontFamily: "Manrope, sans-serif", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
-              Go to Sign in
-            </button>
-          </div>
-        </div>
+        </main>
       </div>
     );
   }
 
   return (
-    <div style={{ minHeight: "100vh", backgroundColor: "var(--bg)", color: "var(--on-surface)", fontFamily: "Manrope, sans-serif" }}>
+    <div className="dash" data-dash-theme={themeAttr}>
+      <a href="#main" className="d-sr-only">Skip to content</a>
+      {header}
 
-      {/* Nav */}
-      <nav style={{ background: "var(--nav-bg)", backdropFilter: "blur(20px)", borderBottom: "1px solid var(--surface-high)", padding: "0 24px", height: 60, display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 50 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }} onClick={() => navigate("/")}>
-          <div style={{ width: 28, height: 28, background: "var(--surface-high)", border: "1px solid var(--outline)", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <span className="material-symbols-outlined" style={{ fontSize: 15, color: "var(--on-surface)" }}>mosque</span>
+      <main id="main" className="pub-auth">
+        <div className="pub-auth-inner pub-auth-inner--wide">
+          <div className="d-stack" style={{ gap: 8 }}>
+            <h1 className="d-h1">Register your masjid</h1>
+            <p className="d-sub">
+              Tell us about your masjid and who we should contact. We will check your details and email you when you can sign in.
+            </p>
           </div>
-          <span style={{ fontWeight: 700, fontSize: 15, color: "var(--on-surface)" }}>jam3ah</span>
+
+          {/* Not a <form>: pressing Enter in a field should not send the request by accident. */}
+          <div className="d-card d-card-pad pub-form">
+            <section className="pub-section" aria-labelledby="su-masjid">
+              <div className="pub-section-head">
+                <span className="pub-step" aria-hidden="true">1</span>
+                <h2 id="su-masjid" className="d-h2">About your masjid</h2>
+              </div>
+              <Field id="su-name" label="Masjid name" required value={formData.masjidName} onChange={set("masjidName")}
+                placeholder="Al-Noor Islamic Centre" autoComplete="organization" />
+              <Field id="su-street" label="Street address" value={formData.street} onChange={set("street")}
+                placeholder="20 Overlea Blvd" autoComplete="street-address" />
+              <div className="d-grid-2">
+                <Field id="su-city" label="City" value={formData.city} onChange={set("city")}
+                  placeholder="Toronto" autoComplete="address-level2" />
+                <Field id="su-state" label="Province or state" value={formData.state} onChange={set("state")}
+                  placeholder="Ontario" autoComplete="address-level1" />
+              </div>
+              <div className="d-grid-2">
+                <Field id="su-postal" label="Postal or ZIP code" value={formData.postalCode} onChange={set("postalCode")}
+                  placeholder="M4H 1B1" autoComplete="postal-code" />
+                <Field id="su-country" label="Country" value={formData.country} onChange={set("country")}
+                  placeholder="Canada" autoComplete="country-name" />
+              </div>
+              <div className="d-grid-2">
+                <Field id="su-phone" label="Masjid phone" type="tel" value={formData.masjidPhone} onChange={set("masjidPhone")}
+                  placeholder="+1 555 000 0000" autoComplete="tel" />
+                <Field id="su-email" label="Masjid email" type="email" required value={formData.masjidEmail} onChange={set("masjidEmail")}
+                  placeholder="info@yourmasjid.org" autoComplete="email" help="We will send your sign-in details here." />
+              </div>
+            </section>
+
+            <section className="pub-section" aria-labelledby="su-contact">
+              <div className="pub-section-head">
+                <span className="pub-step" aria-hidden="true">2</span>
+                <h2 id="su-contact" className="d-h2">Who should we contact?</h2>
+              </div>
+              <div className="d-grid-2">
+                <Field id="su-contact-name" label="Your full name" required value={formData.inchargeName} onChange={set("inchargeName")}
+                  placeholder="Abdullah Khan" autoComplete="name" />
+                <Field id="su-contact-phone" label="Your phone number" type="tel" value={formData.inchargePhone} onChange={set("inchargePhone")}
+                  placeholder="+1 555 000 0000" autoComplete="tel" />
+              </div>
+            </section>
+
+            {error && (
+              <div className="d-notice d-notice--danger" role="alert">
+                <Icon name="error" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            <button type="button" className="d-btn d-btn--primary pub-btn-full" onClick={handleSubmit} disabled={isSubmitting}>
+              {isSubmitting ? <><Spinner />Sending your request...</> : "Send registration request"}
+            </button>
+
+            <p className="d-help pub-center">
+              By sending this request, you agree to our terms. Our team reviews every request before a masjid can sign in.
+            </p>
+          </div>
         </div>
-        <button onClick={() => navigate("/login")} style={{ background: "none", border: "none", color: "var(--text-ghost)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
-          Already registered? Sign in →
-        </button>
-      </nav>
-
-      {/* Content */}
-      <div style={{ maxWidth: 600, margin: "0 auto", padding: "48px 24px 80px" }}>
-        <div style={{ marginBottom: 32 }}>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2, fontSize: 11, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 16 }}>
-            Registration
-          </div>
-          <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.03em", color: "var(--on-surface)", margin: "0 0 6px" }}>Register Your Masjid</h1>
-          <p style={{ fontSize: 14, color: "var(--text-ghost)", margin: 0 }}>Join the jam3ah network and connect your community</p>
-        </div>
-
-        <div style={{ background: "var(--surface)", border: "1px solid var(--surface-high)", borderRadius: 2, padding: 28, display: "flex", flexDirection: "column", gap: 28 }}>
-
-          {/* Masjid Info */}
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20, paddingBottom: 14, borderBottom: "1px solid var(--surface-mid)" }}>
-              <div style={{ width: 24, height: 24, background: "var(--surface-mid)", border: "1px solid var(--outline-variant)", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <span style={{ fontSize: 11, fontWeight: 800, color: "var(--text-ghost)" }}>1</span>
-              </div>
-              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--on-surface-variant)" }}>Masjid Information</span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <div>
-                <label style={lbl}>Masjid Name <span style={{ color: "#f87171" }}>*</span></label>
-                <input type="text" value={formData.masjidName} onChange={set("masjidName")} style={inp} placeholder="e.g. Al-Noor Islamic Centre"
-                  onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
-              </div>
-              <div>
-                <label style={lbl}>Street Address</label>
-                <input type="text" value={formData.street} onChange={set("street")} style={inp} placeholder="20 Overlea Blvd"
-                  onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
-                <div>
-                  <label style={lbl}>City</label>
-                  <input type="text" value={formData.city} onChange={set("city")} style={inp} placeholder="Toronto"
-                    onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
-                </div>
-                <div>
-                  <label style={lbl}>Province / State</label>
-                  <input type="text" value={formData.state} onChange={set("state")} style={inp} placeholder="Ontario"
-                    onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
-                </div>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
-                <div>
-                  <label style={lbl}>Postal / ZIP Code</label>
-                  <input type="text" value={formData.postalCode} onChange={set("postalCode")} style={inp} placeholder="M4H 1B1"
-                    onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
-                </div>
-                <div>
-                  <label style={lbl}>Country</label>
-                  <input type="text" value={formData.country} onChange={set("country")} style={inp} placeholder="Canada"
-                    onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
-                </div>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
-                <div>
-                  <label style={lbl}>Masjid Phone</label>
-                  <input type="tel" value={formData.masjidPhone} onChange={set("masjidPhone")} style={inp} placeholder="+1 (555) 000-0000"
-                    onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
-                </div>
-                <div>
-                  <label style={lbl}>Masjid Email <span style={{ color: "#f87171" }}>*</span></label>
-                  <input type="email" value={formData.masjidEmail} onChange={set("masjidEmail")} style={inp} placeholder="info@masjid.ca"
-                    onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Person In Charge */}
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20, paddingBottom: 14, borderBottom: "1px solid var(--surface-mid)" }}>
-              <div style={{ width: 24, height: 24, background: "var(--surface-mid)", border: "1px solid var(--outline-variant)", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <span style={{ fontSize: 11, fontWeight: 800, color: "var(--text-ghost)" }}>2</span>
-              </div>
-              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--on-surface-variant)" }}>Person In-Charge</span>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
-              <div>
-                <label style={lbl}>Full Name <span style={{ color: "#f87171" }}>*</span></label>
-                <input type="text" value={formData.inchargeName} onChange={set("inchargeName")} style={inp} placeholder="Sheikh Abdullah"
-                  onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
-              </div>
-              <div>
-                <label style={lbl}>Phone Number</label>
-                <input type="tel" value={formData.inchargePhone} onChange={set("inchargePhone")} style={inp} placeholder="+1 (555) 000-0000"
-                  onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }} onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }} />
-              </div>
-            </div>
-          </div>
-
-          {error && (
-            <div style={{ padding: "10px 14px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 2 }}>
-              <p style={{ color: "#f87171", fontSize: 13, margin: 0, fontWeight: 500 }}>{error}</p>
-            </div>
-          )}
-
-          <button onClick={handleSubmit} disabled={isSubmitting}
-            style={{ width: "100%", padding: "12px", background: isSubmitting ? "var(--surface-mid)" : "var(--accent)", border: "1px solid transparent", borderRadius: 2, color: isSubmitting ? "var(--text-phantom)" : "var(--accent-text)", fontFamily: "Manrope, sans-serif", fontWeight: 700, fontSize: 14, cursor: isSubmitting ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
-            onMouseEnter={e => { if (!isSubmitting) (e.currentTarget as HTMLElement).style.background = "var(--accent-light)"; }}
-            onMouseLeave={e => { if (!isSubmitting) (e.currentTarget as HTMLElement).style.background = "var(--accent)"; }}>
-            {isSubmitting ? (
-              <>
-                <span className="material-symbols-outlined" style={{ fontSize: 16, animation: "spin 1s linear infinite" }}>progress_activity</span>
-                Submitting...
-              </>
-            ) : "Submit Registration"}
-          </button>
-
-          <p style={{ fontSize: 11, color: "var(--outline)", textAlign: "center", margin: 0 }}>
-            By submitting, you agree to our terms. Your registration will be reviewed by the admin team.
-          </p>
-        </div>
-      </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </main>
     </div>
   );
 };

@@ -1,0 +1,432 @@
+/* Public pages (landing, sign in, register, not found).
+   Built on the dashboard design system: only --d-* tokens, so light and dark both work. */
+
+/* ── Shared header ──────────────────────────────────────────────────────── */
+.pub-brand {
+  color: var(--d-text);
+  text-decoration: none;
+  border-radius: var(--d-r-btn);
+}
+.pub-brand:hover {
+  color: var(--d-text);
+}
+.pub-brand .d-brand-name {
+  font-size: 21px;
+}
+.pub-header-actions {
+  margin-left: auto;
+}
+
+/* ── Shared bits ────────────────────────────────────────────────────────── */
+.pub-btn-full {
+  width: 100%;
+}
+.pub-center {
+  text-align: center;
+}
+.pub-icon-chip {
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  border-radius: var(--d-r-card);
+  background: var(--d-accent-soft);
+  color: var(--d-accent-soft-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dash .pub-icon-chip .material-symbols-outlined {
+  font-size: 30px;
+}
+.pub-icon-chip--success {
+  background: var(--d-success-soft);
+  color: var(--d-success);
+}
+.pub-footer {
+  padding: 28px 32px 36px;
+  border-top: 1px solid var(--d-border);
+  text-align: center;
+  font-size: 15px;
+  color: var(--d-text-3);
+}
+
+/* ── Sign in / register layout ──────────────────────────────────────────── */
+.pub-auth {
+  display: flex;
+  justify-content: center;
+  padding: 56px 32px 72px;
+}
+.pub-auth-inner {
+  width: 100%;
+  max-width: 500px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+.pub-auth-inner--mid {
+  max-width: 640px;
+}
+.pub-auth-inner--wide {
+  max-width: 760px;
+}
+.pub-form {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* Password field with a Show / Hide button inside it */
+.pub-password {
+  position: relative;
+}
+.pub-password .d-input {
+  padding-right: 104px;
+}
+.pub-password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  min-height: 40px;
+  padding: 0 12px;
+  font-size: 16px;
+}
+
+/* Large tick box with its label */
+.pub-check {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: fit-content;
+  font-size: 17px;
+  cursor: pointer;
+}
+.pub-check input {
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--d-accent);
+  cursor: pointer;
+}
+
+/* Register form sections */
+.pub-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.pub-section + .pub-section {
+  padding-top: 28px;
+  border-top: 1px solid var(--d-border);
+}
+.pub-section-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.pub-step {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--d-accent-soft);
+  color: var(--d-accent-soft-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--d-font-head) !important;
+  font-size: 17px;
+  font-weight: 800;
+}
+.pub-optional {
+  font-weight: 400;
+  color: var(--d-text-2);
+}
+
+/* ── Landing page ───────────────────────────────────────────────────────── */
+.lp-wrap {
+  width: 100%;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 0 32px;
+}
+.lp-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 56px;
+  align-items: center;
+  padding-top: 72px;
+  padding-bottom: 72px;
+}
+.lp-hero-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 24px;
+}
+.dash .lp-title {
+  font-size: 56px;
+  line-height: 1.08;
+  letter-spacing: -0.025em;
+}
+.lp-title-accent {
+  color: var(--d-accent);
+  white-space: nowrap;
+}
+.lp-lead {
+  margin: 0;
+  max-width: 34em;
+  font-size: 20px;
+  line-height: 1.55;
+  color: var(--d-text-2);
+}
+.lp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.lp-badge {
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 15px;
+}
+.dash .lp-badge .material-symbols-outlined {
+  font-size: 18px;
+}
+
+/* Example card in the hero */
+.lp-preview-head {
+  padding: 22px 24px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.lp-prow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--d-border);
+}
+.lp-prow.is-next {
+  background: var(--d-accent-soft);
+}
+.lp-prow.is-next .d-pname,
+.lp-prow.is-next .d-ptag {
+  color: var(--d-accent-soft-text);
+}
+.lp-preview-note {
+  margin: 0;
+  padding: 16px 24px 20px;
+  border-top: 1px solid var(--d-border);
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  font-size: 16px;
+  color: var(--d-text-2);
+}
+.lp-preview-note strong {
+  font-weight: 700;
+  color: var(--d-text);
+}
+.lp-preview-note .material-symbols-outlined {
+  color: var(--d-accent);
+}
+
+/* Bands and sections */
+.lp-band {
+  background: var(--d-surface);
+  border-top: 1px solid var(--d-border);
+  border-bottom: 1px solid var(--d-border);
+}
+.lp-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  padding-top: 40px;
+  padding-bottom: 40px;
+  margin: 0 auto;
+  list-style: none;
+  text-align: center;
+}
+.lp-stat-value {
+  display: block;
+  font-family: var(--d-font-head) !important;
+  font-size: 40px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--d-accent);
+}
+.lp-stat-label {
+  font-size: 17px;
+  color: var(--d-text-2);
+}
+.lp-section {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  padding-top: 72px;
+  padding-bottom: 72px;
+}
+.lp-section-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 40em;
+}
+.dash .lp-section-title {
+  font-size: 32px;
+}
+.lp-feature {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.lp-feature .pub-icon-chip {
+  width: 52px;
+  height: 52px;
+  margin-bottom: 4px;
+}
+.dash .lp-feature .pub-icon-chip .material-symbols-outlined {
+  font-size: 28px;
+}
+.lp-feature p,
+.lp-step p {
+  margin: 0;
+  font-size: 17px;
+  color: var(--d-text-2);
+}
+.lp-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lp-step {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.lp-step .pub-step {
+  width: 44px;
+  height: 44px;
+  font-size: 20px;
+  background: var(--d-accent);
+  color: var(--d-on-accent);
+  margin-bottom: 4px;
+}
+.lp-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 56px 32px;
+  text-align: center;
+  background: var(--d-accent-soft);
+  border-color: transparent;
+}
+.lp-cta .d-sub {
+  max-width: 32em;
+}
+.lp-cta .lp-actions {
+  margin-top: 8px;
+  justify-content: center;
+}
+
+/* ── Not found ──────────────────────────────────────────────────────────── */
+.nf-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 48px 40px;
+  text-align: center;
+}
+.nf-card .lp-actions {
+  margin-top: 12px;
+  justify-content: center;
+}
+
+/* ── Smaller screens ────────────────────────────────────────────────────── */
+@media (max-width: 1023px) {
+  .lp-hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 40px;
+  }
+  .lp-preview {
+    max-width: 560px;
+  }
+  .lp-steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 767px) {
+  .dash .pub-hide-mobile {
+    display: none;
+  }
+  .pub-brand .d-brand-name {
+    font-size: 19px;
+  }
+  .pub-footer {
+    padding: 24px 16px 32px;
+  }
+  .pub-auth {
+    padding: 28px 16px 48px;
+  }
+  .pub-auth-inner {
+    gap: 22px;
+  }
+  .lp-wrap {
+    padding: 0 16px;
+  }
+  .lp-hero {
+    padding-top: 36px;
+    padding-bottom: 44px;
+    gap: 32px;
+  }
+  .lp-hero-text {
+    gap: 20px;
+  }
+  .dash .lp-title {
+    font-size: 38px;
+  }
+  .lp-lead {
+    font-size: 18px;
+  }
+  .lp-actions,
+  .lp-actions .d-btn {
+    width: 100%;
+  }
+  .lp-prow,
+  .lp-preview-head,
+  .lp-preview-note {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+  .lp-stats {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+    padding-top: 32px;
+    padding-bottom: 32px;
+  }
+  .lp-section {
+    padding-top: 48px;
+    padding-bottom: 48px;
+    gap: 24px;
+  }
+  .dash .lp-section-title {
+    font-size: 26px;
+  }
+  .lp-cta {
+    padding: 36px 20px;
+  }
+  .nf-card {
+    padding: 32px 20px;
+  }
+}

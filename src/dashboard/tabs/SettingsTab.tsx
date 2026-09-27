@@ -1,922 +1,246 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import useIsMobile from "../../hooks/useIsMobile";
-import { supabaseAdmin } from "../../lib/supabase";
-import { THEMES, type ThemeKey } from "../themes";
-import {
-  CALC_METHODS, TIMEZONES, MADHABS, HIGH_LATITUDE_RULES,
-  POLAR_CIRCLE_RESOLUTIONS, SHAFAQ_OPTIONS, ROUNDING_OPTIONS, METHOD_ANGLES,
-  type PrayerPreset, type MonthPresetMap,
-} from "../constants";
-import LocalInput from "../components/LocalInput";
-import Select from "../components/Select";
+import { CALC_METHODS, TIMEZONES, type MonthPresetMap, type PrayerPreset } from "../constants";
 import LocationMap from "../components/LocationMap";
+import AdvancedCalcModal from "../components/AdvancedCalcModal";
+import { Choice, Icon, Spinner, ToggleRow } from "../ui";
 
-interface SettingsTabProps {
-  theme: typeof THEMES[ThemeKey];
-  settingsTab: string;
-  setSettingsTab: React.Dispatch<React.SetStateAction<string>>;
-  registeredEmail: string;
-  generalSettings: {
-    masjidName: string;
-    address: string;
-    city: string;
-    province: string;
-    postalCode: string;
-    phone: string;
-  };
-  setGeneralSettings: React.Dispatch<React.SetStateAction<SettingsTabProps["generalSettings"]>>;
-  settingsSaved: boolean;
-  savedGeneralSettings: SettingsTabProps["generalSettings"];
-  handleSaveSettings: () => void;
-  prayerSettings: {
-    latitude: string; longitude: string; timezone: string;
-    method: string; fajrAngle: string; ishaAngle: string;
-    ishaInterval: string; maghribAngle: string;
-    madhab: string; highLatitudeRule: string;
-    polarCircleResolution: string; shafaq: string; rounding: string;
-    adjustFajr: string; adjustSunrise: string; adjustDhuhr: string;
-    adjustAsr: string; adjustMaghrib: string; adjustIsha: string;
-  };
-  setPrayerSettings: React.Dispatch<React.SetStateAction<SettingsTabProps["prayerSettings"]>>;
-  jamaatSettings: { fajr2: boolean; fajr3: boolean; maghrib2: boolean; maghrib3: boolean };
-  setJamaatSettings: React.Dispatch<React.SetStateAction<{ fajr2: boolean; fajr3: boolean; maghrib2: boolean; maghrib3: boolean }>>;
-  extraTimings: { fajr: string[]; maghrib: string[]; jummah: string[]; jummahSlots: [boolean, boolean, boolean]; weekendIsha: { enabled: boolean; days: string[]; iqama: string } };
-  setExtraTimings: React.Dispatch<React.SetStateAction<{ fajr: string[]; maghrib: string[]; jummah: string[]; jummahSlots: [boolean, boolean, boolean]; weekendIsha: { enabled: boolean; days: string[]; iqama: string } }>>;
-  prayerPresets: PrayerPreset[];
-  monthPresetMap: MonthPresetMap;
-  handleAddPreset: () => void;
-  handleDeletePreset: (id: string) => void;
-  handleUpdatePreset: (id: string, patch: Partial<PrayerPreset>) => void;
-  handleSetMonthPreset: (month: number, presetId: string) => void;
-  handleSavePresets: () => void;
-  presetsSaved: boolean;
-  savedPrayerPresets: PrayerPreset[];
-  savedMonthPresetMap: MonthPresetMap;
-  handleCancelPresets: () => void;
-  handleSavePresetsOnly: () => void;
-  handleSavePresetsAndRegen: () => void;
-  hasGeneratedMonths: boolean;
+export interface GeneralSettings {
+  masjidName: string;
+  address: string;
+  city: string;
+  province: string;
+  postalCode: string;
+  phone: string;
 }
 
-// ── Shared style constants ────────────────────────────────────────────────────
+type Jamaat = { fajr2: boolean; fajr3: boolean; maghrib2: boolean; maghrib3: boolean };
+type Location = { latitude: string; longitude: string; timezone: string };
 
-const inputStyle: React.CSSProperties = {
-  background: "var(--surface-low)",
-  border: "1px solid var(--outline-variant)",
-  color: "var(--on-surface)",
-  borderRadius: 2,
-  fontFamily: "Manrope, sans-serif",
-  fontSize: 13,
-  padding: "10px 12px",
-  width: "100%",
-  outline: "none",
-  boxSizing: "border-box",
+interface SettingsTabProps {
+  dark: boolean;
+  registeredEmail: string;
+  general: GeneralSettings;
+  setGeneral: React.Dispatch<React.SetStateAction<GeneralSettings>>;
+  savedGeneral: GeneralSettings;
+  onSaveGeneral: () => Promise<void>;
+  location: Location;
+  setLocation: (patch: Partial<Location>) => void;
+  savedLocation: Location;
+  presets: PrayerPreset[];
+  monthMap: MonthPresetMap;
+  savedPresets: PrayerPreset[];
+  savedMonthMap: MonthPresetMap;
+  onUpdatePreset: (id: string, patch: Partial<PrayerPreset>) => void;
+  onAddPreset: () => void;
+  onDeletePreset: (id: string) => void;
+  onSetMonthPreset: (month: number, presetId: string) => void;
+  onSaveCalculation: () => void;
+  onUndoCalculation: () => void;
+  savingCalculation: boolean;
+  jamaat: Jamaat;
+  onSetJamaat: (next: Jamaat) => void;
+}
+
+const METHOD_HELP: Record<string, string> = {
+  NorthAmerica: "Used by most masjids in Canada and the USA.",
+  MoonsightingCommittee: "Popular in North America and the UK. Adjusts Fajr and Isha by season.",
+  MuslimWorldLeague: "Common in Europe and the Far East.",
 };
 
-const inputDisabledStyle: React.CSSProperties = {
-  ...inputStyle,
-  opacity: 0.4,
-  cursor: "not-allowed",
-};
-
-const labelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 600,
-  color: "var(--text-ghost)",
-  display: "block",
-  marginBottom: 6,
-  fontFamily: "Manrope, sans-serif",
-};
-
-
-const cardStyle: React.CSSProperties = {
-  background: "var(--surface-low)",
-  border: "1px solid var(--surface-high)",
-  borderRadius: 2,
-  overflow: "hidden",
-};
-
-const cardHeaderStyle: React.CSSProperties = {
-  padding: "18px 24px",
-  borderBottom: "1px solid var(--outline-subtle)",
-};
-
-const cardBodyStyle: React.CSSProperties = {
-  padding: "20px 24px",
-};
-
-// ── Sub-components ────────────────────────────────────────────────────────────
-
-const Card: React.FC<{ title: string; subtitle?: string; children: React.ReactNode; headerExtra?: React.ReactNode; compact?: boolean; noPadding?: boolean }> = ({
-  title, subtitle, children, headerExtra, compact = false, noPadding = false,
-}) => (
-  <div style={cardStyle}>
-    <div style={{ ...cardHeaderStyle, padding: compact ? "12px 16px" : "18px 24px", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontFamily: "Manrope, sans-serif", fontSize: compact ? 14 : 15, fontWeight: 800, color: "var(--text-max)", letterSpacing: "-0.02em" }}>{title}</div>
-        {subtitle && (
-          <div style={{ fontFamily: "Manrope, sans-serif", fontSize: compact ? 12 : 13, color: "var(--text-dim)", fontWeight: 400, marginTop: 4 }}>{subtitle}</div>
-        )}
-      </div>
-      {headerExtra && <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>{headerExtra}</div>}
-    </div>
-    <div style={noPadding ? undefined : { ...cardBodyStyle, padding: compact ? "16px 16px" : "20px 24px" }}>{children}</div>
-  </div>
-);
-
-const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
-  <div>
-    <label style={labelStyle}>{label}</label>
-    {children}
-  </div>
-);
-
-// ── Main component ────────────────────────────────────────────────────────────
-
-const PRESET_DOTS = ["#34d399","#60a5fa","#f472b6","#fb923c","#a78bfa"];
-const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 const SettingsTab: React.FC<SettingsTabProps> = ({
-  theme,
-  settingsTab, setSettingsTab,
-  registeredEmail,
-  generalSettings, setGeneralSettings,
-  settingsSaved, savedGeneralSettings, handleSaveSettings,
-  prayerSettings, setPrayerSettings,
-  jamaatSettings, setJamaatSettings,
-  extraTimings, setExtraTimings,
-  prayerPresets, monthPresetMap,
-  handleAddPreset, handleDeletePreset, handleUpdatePreset,
-  handleSetMonthPreset, handleSavePresets, presetsSaved,
-  savedPrayerPresets, savedMonthPresetMap, handleCancelPresets,
-  handleSavePresetsOnly, handleSavePresetsAndRegen, hasGeneratedMonths,
+  dark, registeredEmail, general, setGeneral, savedGeneral, onSaveGeneral, location, setLocation, savedLocation,
+  presets, monthMap, savedPresets, savedMonthMap, onUpdatePreset, onAddPreset, onDeletePreset, onSetMonthPreset,
+  onSaveCalculation, onUndoCalculation, savingCalculation, jamaat, onSetJamaat,
 }) => {
   const navigate = useNavigate();
-  const isMobile = useIsMobile();
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [feedExplainerOpen, setFeedExplainerOpen] = useState(false);
-  const [mapFlyTrigger, setMapFlyTrigger] = useState(0);
-  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+  const [savingGeneral, setSavingGeneral] = useState(false);
+  const [editingPin, setEditingPin] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  const hasPresetChanges =
-    JSON.stringify(prayerPresets) !== JSON.stringify(savedPrayerPresets) ||
-    JSON.stringify(monthPresetMap) !== JSON.stringify(savedMonthPresetMap);
+  const generalDirty = JSON.stringify(general) !== JSON.stringify(savedGeneral);
+  const calcDirty =
+    JSON.stringify(presets) !== JSON.stringify(savedPresets) ||
+    JSON.stringify(monthMap) !== JSON.stringify(savedMonthMap) ||
+    JSON.stringify(location) !== JSON.stringify(savedLocation);
+  const allMonthsAssigned = Array.from({ length: 12 }, (_, i) => i + 1).every(m => !!monthMap[m]);
+  const single = presets.length === 1 ? presets[0] : null;
 
-  const copyToClipboard = (text: string, key: string) => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopiedKey(key);
-      setTimeout(() => setCopiedKey(k => k === key ? null : k), 2000);
-    });
+  const field = (key: keyof GeneralSettings, label: string, opts: { placeholder?: string; help?: string; autoComplete?: string } = {}) => (
+    <div className="d-field">
+      <label className="d-label" htmlFor={`g-${key}`}>{label}</label>
+      <input
+        id={`g-${key}`}
+        className="d-input"
+        value={general[key]}
+        placeholder={opts.placeholder}
+        autoComplete={opts.autoComplete}
+        onChange={e => setGeneral(g => ({ ...g, [key]: e.target.value }))}
+      />
+      {opts.help && <p className="d-help">{opts.help}</p>}
+    </div>
+  );
+
+  const saveGeneral = async () => {
+    setSavingGeneral(true);
+    try { await onSaveGeneral(); } finally { setSavingGeneral(false); }
   };
 
-  void theme;
-  void settingsTab;
-  void setSettingsTab;
+  const monthsFor = (id: string) => {
+    const ms = Array.from({ length: 12 }, (_, i) => i + 1).filter(m => monthMap[m] === id);
+    return ms.length === 12 ? "Every month" : ms.map(m => MONTH_NAMES[m - 1]).join(", ") || "No months yet";
+  };
+  const methodLabel = (v: string) => CALC_METHODS.find(m => m.value === v)?.label ?? v;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 73px)", background: "var(--bg)", fontFamily: "Manrope, sans-serif", overflowX: "hidden" }}>
-
-      {/* ── Content ── */}
-      <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "20px 16px 80px" : "28px 32px" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-
-            {(() => {
-              const hasChanges = JSON.stringify(generalSettings) !== JSON.stringify(savedGeneralSettings);
-              return (
-                <Card compact={isMobile} title="Masjid Profile" headerExtra={
-                  hasChanges ? (
-                    <button onClick={handleSaveSettings} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 16px", background: "var(--accent)", color: "var(--accent-text)", border: "none", borderRadius: 2, fontFamily: "Manrope, sans-serif", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>save</span>
-                      Save
-                    </button>
-                  ) : settingsSaved ? (
-                    <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, color: "rgba(100,200,100,0.8)", fontFamily: "Manrope, sans-serif" }}>
-                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>check</span>
-                      Saved
-                    </span>
-                  ) : null
-                }>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-
-                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
-                      <Field label="Masjid / Academy Name">
-                        <LocalInput style={inputStyle} value={generalSettings.masjidName}
-                          onCommit={v => setGeneralSettings({ ...generalSettings, masjidName: v })}
-                          placeholder="e.g., Toronto Hifz Academy" />
-                      </Field>
-                      <Field label="Registered Email">
-                        <div style={{ ...inputStyle, opacity: 0.4, cursor: "not-allowed", userSelect: "none" }}>
-                          {registeredEmail || "—"}
-                        </div>
-                      </Field>
-                    </div>
-
-                    <Field label="Street Address">
-                      <LocalInput style={inputStyle} value={generalSettings.address}
-                        onCommit={v => setGeneralSettings({ ...generalSettings, address: v })}
-                        placeholder="123 Main St" />
-                    </Field>
-
-                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "2fr 1fr 1fr 1fr", gap: 12 }}>
-                      <Field label="City">
-                        <LocalInput style={inputStyle} value={generalSettings.city}
-                          onCommit={v => setGeneralSettings({ ...generalSettings, city: v })}
-                          placeholder="Toronto" />
-                      </Field>
-                      <Field label="Province">
-                        <LocalInput style={inputStyle} value={generalSettings.province}
-                          onCommit={v => setGeneralSettings({ ...generalSettings, province: v })}
-                          placeholder="ON" />
-                      </Field>
-                      <Field label="Postal Code">
-                        <LocalInput style={inputStyle} value={generalSettings.postalCode}
-                          onCommit={v => setGeneralSettings({ ...generalSettings, postalCode: v })}
-                          placeholder="M9A 1A1" />
-                      </Field>
-                      <Field label="Contact Number">
-                        <LocalInput style={inputStyle} value={generalSettings.phone}
-                          onCommit={v => setGeneralSettings({ ...generalSettings, phone: v })}
-                          placeholder="+1 (416) 555-0000" />
-                      </Field>
-                    </div>
-
-                  </div>
-                </Card>
-              );
-            })()}
-
-          {/* ── Prayer Settings section divider ── */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: "var(--text-faint)", whiteSpace: "nowrap" }}>Prayer Settings</div>
-            <div style={{ flex: 1, height: 1, background: "var(--outline-subtle)" }} />
-          </div>
-
-            {/* Location + Jamaats/Jummah side by side */}
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, alignItems: "stretch" }}>
-
-              {/* Left: Location */}
-              <div style={{ ...cardStyle, display: "flex", flexDirection: "column" }}>
-                <div style={{ ...cardHeaderStyle, padding: isMobile ? "12px 16px" : "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <div style={{ fontFamily: "Manrope, sans-serif", fontSize: isMobile ? 14 : 15, fontWeight: 800, color: "var(--text-max)", letterSpacing: "-0.02em" }}>Location</div>
-                  <button
-                    onClick={() => setMapFlyTrigger(t => t + 1)}
-                    style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 11px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, fontFamily: "Manrope, sans-serif", fontSize: 11, fontWeight: 700, color: "var(--text-ghost)", cursor: "pointer", transition: "border-color 0.15s, color 0.15s" }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--outline)"; (e.currentTarget as HTMLElement).style.color = "var(--on-surface)"; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--outline-variant)"; (e.currentTarget as HTMLElement).style.color = "var(--text-ghost)"; }}>
-                    <span className="material-symbols-outlined" style={{ fontSize: 13 }}>my_location</span>
-                    Back to pin
-                  </button>
-                </div>
-                <div style={{ ...cardBodyStyle, padding: isMobile ? "16px 16px" : "20px 24px", flex: 1, display: "flex", flexDirection: "column" }}>
-                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
-                    <div>
-                      <label style={labelStyle}>Latitude</label>
-                      <div style={{ ...inputStyle, color: "var(--text-dim)", cursor: "default", userSelect: "text" }}>{prayerSettings.latitude || "—"}</div>
-                    </div>
-                    <div>
-                      <label style={labelStyle}>Longitude</label>
-                      <div style={{ ...inputStyle, color: "var(--text-dim)", cursor: "default", userSelect: "text" }}>{prayerSettings.longitude || "—"}</div>
-                    </div>
-                    <div style={isMobile ? { gridColumn: "1 / -1" } : undefined}>
-                      <label style={labelStyle}>Timezone</label>
-                      <Select value={prayerSettings.timezone} onChange={v => setPrayerSettings(p => ({ ...p, timezone: v }))} options={TIMEZONES} />
-                    </div>
-                  </div>
-                  <div style={{ flex: 1, minHeight: 200 }}>
-                    <LocationMap latitude={prayerSettings.latitude} longitude={prayerSettings.longitude}
-                      flyTrigger={mapFlyTrigger} readOnly autoCenter height="100%" />
-                  </div>
-                </div>
-              </div>
-
-              {/* Right: Multiple Jamaats + Jummah stacked */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-
-                {/* Multiple Jamaats */}
-                <Card compact={isMobile} title="Multiple Jamaats" subtitle="Enable additional jamaats for Fajr and Maghrib">
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    {([
-                      { key: "fajr2" as const,    label: "Fajr",    jamaat: "2nd Jamaat", requires: null         },
-                      { key: "fajr3" as const,    label: "Fajr",    jamaat: "3rd Jamaat", requires: "fajr2"      },
-                      { key: "maghrib2" as const, label: "Maghrib", jamaat: "2nd Jamaat", requires: null         },
-                      { key: "maghrib3" as const, label: "Maghrib", jamaat: "3rd Jamaat", requires: "maghrib2"   },
-                    ] as const).map(({ key, label, jamaat, requires }) => {
-                      const active = jamaatSettings[key];
-                      const locked = requires !== null && !jamaatSettings[requires];
-                      return (
-                        <button key={key} disabled={locked} onClick={async () => {
-                            let next = { ...jamaatSettings, [key]: !jamaatSettings[key] };
-                            if (key === "fajr2"    && !next.fajr2)    next = { ...next, fajr3: false };
-                            if (key === "maghrib2" && !next.maghrib2) next = { ...next, maghrib3: false };
-                            setJamaatSettings(next);
-                            const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
-                            if (masjidId) {
-                              await supabaseAdmin.from("prayer_settings").upsert(
-                                { masjid_id: masjidId, jummah_config: { ...extraTimings, jamaatSettings: next } },
-                                { onConflict: "masjid_id" }
-                              );
-                            }
-                          }}
-                          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: active ? "var(--surface-mid)" : "var(--surface)", border: active ? "1px solid var(--outline-variant)" : "1px solid var(--surface-mid)", borderRadius: 2, cursor: locked ? "not-allowed" : "pointer", textAlign: "left", transition: "all 0.15s", opacity: locked ? 0.35 : 1 }}>
-                          <div>
-                            <div style={{ fontFamily: "Manrope, sans-serif", fontSize: 12, fontWeight: 700, color: active ? "var(--on-surface)" : "var(--text-ghost)", marginBottom: 2 }}>{label}</div>
-                            <div style={{ fontFamily: "Manrope, sans-serif", fontSize: 11, color: "var(--outline)" }}>{jamaat}</div>
-                          </div>
-                          <div style={{ width: 28, height: 16, borderRadius: 8, background: active ? "var(--accent-border)" : "var(--surface-high)", border: active ? "1px solid var(--accent-border-strong)" : "1px solid var(--outline-variant)", position: "relative", flexShrink: 0, transition: "background 0.15s" }}>
-                            <div style={{ position: "absolute", top: 2, left: active ? 12 : 2, width: 10, height: 10, borderRadius: "50%", background: active ? "var(--accent)" : "var(--outline)", transition: "left 0.15s, background 0.15s" }} />
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </Card>
-
-                {/* Jummah Khutbahs */}
-                <Card compact={isMobile} title="Jummah" subtitle="Enable khutbah slots to show in Prayer Schedule Builder">
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    {(["1st Khutbah", "2nd Khutbah", "3rd Khutbah"] as const).map((label, i) => {
-                      const active = extraTimings.jummahSlots[i];
-                      const locked = i > 0 && !extraTimings.jummahSlots[i - 1];
-                      return (
-                        <button key={i} disabled={locked}
-                          onClick={async () => {
-                            const s: [boolean, boolean, boolean] = [...extraTimings.jummahSlots] as [boolean, boolean, boolean];
-                            s[i] = !s[i];
-                            if (!s[i]) { for (let j = i + 1; j < 3; j++) s[j] = false; }
-                            const next = { ...extraTimings, jummahSlots: s };
-                            setExtraTimings(next);
-                            const masjidId = sessionStorage.getItem("masjid_id") || localStorage.getItem("masjid_id");
-                            if (masjidId) {
-                              await supabaseAdmin.from("prayer_settings").upsert(
-                                { masjid_id: masjidId, jummah_config: { ...next, jamaatSettings } },
-                                { onConflict: "masjid_id" }
-                              );
-                            }
-                          }}
-                          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: active ? "var(--surface-mid)" : "var(--surface)", border: active ? "1px solid var(--outline-variant)" : "1px solid var(--surface-mid)", borderRadius: 2, cursor: locked ? "not-allowed" : "pointer", textAlign: "left", transition: "all 0.15s", opacity: locked ? 0.35 : 1 }}>
-                          <div>
-                            <div style={{ fontFamily: "Manrope, sans-serif", fontSize: 12, fontWeight: 700, color: active ? "var(--on-surface)" : "var(--text-ghost)", marginBottom: 2 }}>Jummah</div>
-                            <div style={{ fontFamily: "Manrope, sans-serif", fontSize: 11, color: "var(--outline)" }}>{label}</div>
-                          </div>
-                          <div style={{ width: 28, height: 16, borderRadius: 8, background: active ? "var(--accent-border)" : "var(--surface-high)", border: active ? "1px solid var(--accent-border-strong)" : "1px solid var(--outline-variant)", position: "relative", flexShrink: 0, transition: "background 0.15s" }}>
-                            <div style={{ position: "absolute", top: 2, left: active ? 12 : 2, width: 10, height: 10, borderRadius: "50%", background: active ? "var(--accent)" : "var(--outline)", transition: "left 0.15s, background 0.15s" }} />
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </Card>
-
-              </div>
-            </div>
-
-            {/* ── Monthly Presets ── */}
-            {(() => {
-              const MONTHS = MONTHS_SHORT;
-              const ADJUSTMENTS = [
-                { key: "adjustFajr"    as const, label: "Fajr"    },
-                { key: "adjustSunrise" as const, label: "Sunrise" },
-                { key: "adjustDhuhr"   as const, label: "Dhuhr"   },
-                { key: "adjustAsr"     as const, label: "Asr"     },
-                { key: "adjustMaghrib" as const, label: "Maghrib" },
-                { key: "adjustIsha"    as const, label: "Isha"    },
-              ] as const;
-
-              const unassignedMonths = Array.from({ length: 12 }, (_, i) => i + 1).filter(m => !monthPresetMap[m]);
-
-              return (
-                <>
-                {unassignedMonths.length > 0 && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 14px", background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.22)", borderRadius: 2, fontFamily: "Manrope, sans-serif" }}>
-                    <span className="material-symbols-outlined" style={{ fontSize: 15, color: "#fbbf24", flexShrink: 0 }}>warning</span>
-                    <span style={{ fontSize: 12, color: "#fbbf24", fontWeight: 600 }}>
-                      {unassignedMonths.map(m => MONTHS_SHORT[m - 1]).join(", ")} {unassignedMonths.length === 1 ? "has" : "have"} no preset assigned
-                    </span>
-                  </div>
-                )}
-                <Card
-                  compact={isMobile}
-                  noPadding
-                  title="Monthly Presets"
-                  subtitle={isMobile ? undefined : "Create configurations and assign them to months. Inherits location and timezone from above."}
-                  headerExtra={
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      {presetsSaved && !hasPresetChanges && (
-                        <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 12, fontWeight: 700, color: "rgba(100,200,100,0.75)", display: "flex", alignItems: "center", gap: 4 }}>
-                          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>check</span>Saved
-                        </span>
-                      )}
-                      {hasPresetChanges && (
-                        <>
-                          <button onClick={handleCancelPresets} style={{ display: "flex", alignItems: "center", gap: 5, padding: isMobile ? "6px 10px" : "7px 14px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, fontFamily: "Manrope, sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, color: "var(--on-surface-variant)", cursor: "pointer" }}>
-                            <span className="material-symbols-outlined" style={{ fontSize: 13 }}>close</span>Cancel
-                          </button>
-                          {(() => {
-                            const allAssigned = Array.from({ length: 12 }, (_, i) => i + 1).every(m => !!monthPresetMap[m]);
-                            return (
-                              <button onClick={() => allAssigned && setShowSaveConfirm(true)} disabled={!allAssigned} style={{ display: "flex", alignItems: "center", gap: 5, padding: isMobile ? "6px 10px" : "7px 16px", background: "var(--accent)", color: "var(--accent-text)", border: "none", borderRadius: 2, fontFamily: "Manrope, sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, cursor: allAssigned ? "pointer" : "not-allowed", opacity: allAssigned ? 1 : 0.4 }}>
-                                <span className="material-symbols-outlined" style={{ fontSize: 13 }}>save</span>Save
-                              </button>
-                            );
-                          })()}
-                        </>
-                      )}
-                      <button onClick={handleAddPreset} style={{ display: "flex", alignItems: "center", gap: 5, padding: isMobile ? "6px 10px" : "7px 14px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, fontFamily: "Manrope, sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, color: "var(--on-surface-variant)", cursor: "pointer" }}>
-                        <span className="material-symbols-outlined" style={{ fontSize: 13 }}>add</span>{isMobile ? "Preset" : "New Preset"}
-                      </button>
-                    </div>
-                  }
-                >
-                  {prayerPresets.length === 0 ? (
-                    <div style={{ padding: "32px 24px", textAlign: "center", fontFamily: "Manrope, sans-serif", fontSize: 13, color: "var(--text-ghost)" }}>
-                      No presets yet — create one to get started.
-                    </div>
-                  ) : (
-                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 0 }}>
-                      {prayerPresets.map((preset, pi) => {
-                        const dotColor = PRESET_DOTS[pi % PRESET_DOTS.length];
-                        const isCustom = preset.method === "Other";
-                        const methodAngles = METHOD_ANGLES[preset.method] ?? METHOD_ANGLES.Other;
-                        const angleVal = (n: number | null) => n === null ? "" : String(n);
-                        const isLastOdd = pi === prayerPresets.length - 1 && prayerPresets.length % 2 !== 0;
-                        const inRow2Plus = isMobile ? pi >= 1 : pi >= 2;
-                        const isRightCol = !isMobile && pi % 2 === 1;
-                        return (
-                          <div key={preset.id} style={{ gridColumn: (!isMobile && isLastOdd) ? "1 / -1" : undefined, borderTop: inRow2Plus ? "1px solid var(--outline-subtle)" : undefined, borderLeft: isRightCol ? "1px solid var(--outline-subtle)" : undefined, padding: isMobile ? "14px 16px" : "20px", display: "flex", flexDirection: "column", gap: isMobile ? 12 : 16 }}>
-
-                            {/* Preset label + delete */}
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <div style={{ width: 7, height: 7, borderRadius: "50%", background: dotColor, flexShrink: 0 }} />
-                              <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.15em", color: dotColor, fontFamily: "Manrope, sans-serif" }}>Preset {pi + 1}</span>
-                              {prayerPresets.length > 1 && (
-                                <button onClick={() => handleDeletePreset(preset.id)}
-                                  style={{ marginLeft: "auto", width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, cursor: "pointer", color: "var(--text-phantom)", transition: "color 0.15s, border-color 0.15s" }}
-                                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "#f87171"; (e.currentTarget as HTMLElement).style.borderColor = "#f87171"; }}
-                                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "var(--text-phantom)"; (e.currentTarget as HTMLElement).style.borderColor = "var(--outline-variant)"; }}>
-                                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>close</span>
-                                </button>
-                              )}
-                            </div>
-
-                            {/* Month chips */}
-                            <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: isMobile ? 4 : 6 }}>
-                              {MONTHS.map((name, i) => {
-                                const month = i + 1;
-                                const owner = monthPresetMap[month] ?? "";
-                                const isOwned = owner === preset.id;
-                                const isTaken = owner !== "" && owner !== preset.id;
-                                const takenByIdx = isTaken ? prayerPresets.findIndex(p => p.id === owner) : -1;
-                                return (
-                                  <button key={month}
-                                    title={isTaken ? `Assigned to Preset ${takenByIdx + 1} — click to move here` : isOwned ? "Click to unassign" : "Click to assign"}
-                                    onClick={() => handleSetMonthPreset(month, isOwned ? "" : preset.id)}
-                                    style={{ padding: isMobile ? "5px 0" : "5px 12px", borderRadius: 2, border: isOwned ? `1px solid ${dotColor}40` : "1px solid var(--outline-subtle)", background: isOwned ? `${dotColor}15` : "var(--surface-mid)", fontFamily: "Manrope, sans-serif", fontSize: isMobile ? 10 : 11, fontWeight: 700, color: isOwned ? dotColor : isTaken ? "var(--text-phantom)" : "var(--text-ghost)", cursor: "pointer", transition: "all 0.12s", textAlign: "center" }}>
-                                    {name}
-                                  </button>
-                                );
-                              })}
-                            </div>
-
-                            {/* Method + Madhab */}
-                            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
-                              <div>
-                                <label style={labelStyle}>Calculation Method</label>
-                                <Select value={preset.method} onChange={v => handleUpdatePreset(preset.id, { method: v })} options={CALC_METHODS} />
-                              </div>
-                              <div>
-                                <label style={labelStyle}>Asr School</label>
-                                <Select value={preset.madhab} onChange={v => handleUpdatePreset(preset.id, { madhab: v })} options={MADHABS} />
-                              </div>
-                            </div>
-
-                            {/* Angles */}
-                            <div>
-                              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                                <label style={{ ...labelStyle, marginBottom: 0 }}>Angles</label>
-                                {!isCustom && <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", padding: "2px 8px", background: "var(--surface-mid)", border: "1px solid var(--outline-subtle)", borderRadius: 2, color: "var(--text-ghost)", fontFamily: "Manrope, sans-serif" }}>Set by method</span>}
-                              </div>
-                              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 8 }}>
-                                {[
-                                  { label: "Fajr", val: isCustom ? preset.fajrAngle : angleVal(methodAngles.fajr), key: "fajrAngle" as const },
-                                  { label: "Isha", val: isCustom ? preset.ishaAngle : angleVal(methodAngles.isha), key: "ishaAngle" as const },
-                                  { label: "Isha interval", val: isCustom ? preset.ishaInterval : angleVal(methodAngles.ishaInterval), key: "ishaInterval" as const },
-                                  { label: "Maghrib", val: isCustom ? preset.maghribAngle : angleVal(methodAngles.maghrib), key: "maghribAngle" as const },
-                                ].map(f => (
-                                  <div key={f.key}>
-                                    <label style={labelStyle}>{f.label}</label>
-                                    <LocalInput style={isCustom ? inputStyle : inputDisabledStyle} type="number" step="0.1" value={f.val} onCommit={v => isCustom && handleUpdatePreset(preset.id, { [f.key]: v })} placeholder="—" />
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-
-                            {/* Edge Cases + Output */}
-                            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16 }}>
-                              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                                <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif" }}>Edge Cases</span>
-                                <div><label style={labelStyle}>High Latitude Rule</label><Select value={preset.highLatitudeRule} onChange={v => handleUpdatePreset(preset.id, { highLatitudeRule: v })} options={HIGH_LATITUDE_RULES} /></div>
-                                <div><label style={labelStyle}>Polar Circle Resolution</label><Select value={preset.polarCircleResolution} onChange={v => handleUpdatePreset(preset.id, { polarCircleResolution: v })} options={POLAR_CIRCLE_RESOLUTIONS} /></div>
-                                <div style={{ opacity: preset.method !== "MoonsightingCommittee" ? 0.4 : 1 }}>
-                                  <label style={labelStyle}>Shafaq{preset.method !== "MoonsightingCommittee" && <span style={{ marginLeft: 6, fontWeight: 400, textTransform: "none", letterSpacing: "normal", color: "var(--text-ghost)" }}>— Moonsighting only</span>}</label>
-                                  <Select value={preset.shafaq} disabled={preset.method !== "MoonsightingCommittee"} onChange={v => handleUpdatePreset(preset.id, { shafaq: v })} options={SHAFAQ_OPTIONS} />
-                                </div>
-                              </div>
-                              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                                <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif" }}>Output</span>
-                                <div><label style={labelStyle}>Time Rounding</label><Select value={preset.rounding} onChange={v => handleUpdatePreset(preset.id, { rounding: v })} options={ROUNDING_OPTIONS} /></div>
-                                <div>
-                                  <label style={labelStyle}>Minute Adjustments</label>
-                                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr", gap: 8 }}>
-                                    {ADJUSTMENTS.map(({ key, label }) => (
-                                      <div key={key}>
-                                        <label style={labelStyle}>{label}</label>
-                                        <LocalInput style={inputStyle} type="number" step="1" value={preset[key]} onCommit={v => handleUpdatePreset(preset.id, { [key]: v })} placeholder="0" />
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </Card>
-                </>
-              );
-            })()}
-
-
-          {/* ── Public Data Feed ── */}
-          {(() => {
-            const BASE = "https://cdn.jam3ah.app/masjids";
-            const slug = (generalSettings.masjidName || "my-masjid")
-              .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-            const fileUrl = `${BASE}/${slug}/prayers.json`;
-            const copied = copiedKey === "feed";
-
-            return (
-              <Card
-                compact={isMobile}
-                title="Public Data Feed"
-                subtitle="One static JSON file — the full year of prayer times. Embed it on your masjid website. Visitors never touch our server."
-              >
-                {/* Single file URL */}
-                <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "stretch" : "center", gap: isMobile ? 8 : 10, padding: "12px 14px", background: "var(--surface-mid)", border: "1px solid var(--outline-subtle)", borderRadius: 2, marginBottom: 10 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
-                    <span className="material-symbols-outlined" style={{ fontSize: 16, color: "var(--accent)", flexShrink: 0 }}>data_object</span>
-                    <code style={{ flex: 1, fontFamily: "monospace", fontSize: isMobile ? 11 : 12, color: "var(--on-surface-variant)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {fileUrl}
-                    </code>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                    <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 10, fontWeight: 600, color: "var(--text-ghost)", background: "var(--surface-high)", border: "1px solid var(--outline-subtle)", borderRadius: 2, padding: "2px 7px", whiteSpace: "nowrap" }}>
-                      permanent URL
-                    </span>
-                    <button
-                      onClick={() => copyToClipboard(fileUrl, "feed")}
-                      style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 11px", background: copied ? "var(--accent-bg)" : "transparent", border: copied ? "1px solid var(--accent-border)" : "1px solid var(--outline-variant)", borderRadius: 2, cursor: "pointer", fontFamily: "Manrope, sans-serif", fontSize: 11, fontWeight: 700, color: copied ? "var(--accent)" : "var(--text-ghost)", transition: "all 0.15s" }}>
-                      <span className="material-symbols-outlined" style={{ fontSize: 13 }}>{copied ? "check" : "content_copy"}</span>
-                      {copied ? "Copied" : "Copy"}
-                    </button>
-                  </div>
-                </div>
-
-                {/* How it works dropdown */}
-                <div style={{ border: "1px solid var(--outline-subtle)", borderRadius: 2, overflow: "hidden" }}>
-                  <button
-                    onClick={() => setFeedExplainerOpen(o => !o)}
-                    style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: "var(--surface)", border: "none", cursor: "pointer", fontFamily: "Manrope, sans-serif", fontSize: 12, fontWeight: 700, color: "var(--on-surface-variant)", textAlign: "left" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span className="material-symbols-outlined" style={{ fontSize: 15, color: "var(--accent)" }}>help</span>
-                      How does this work?
-                    </div>
-                    <span className="material-symbols-outlined" style={{ fontSize: 16, color: "var(--text-ghost)", transition: "transform 0.2s", transform: feedExplainerOpen ? "rotate(180deg)" : "rotate(0deg)" }}>expand_more</span>
-                  </button>
-
-                  {feedExplainerOpen && (
-                    <div style={{ padding: "0 14px 14px", background: "var(--surface)", display: "flex", flexDirection: "column", gap: 14, borderTop: "1px solid var(--outline-subtle)" }}>
-
-                      {/* Flow diagram */}
-                      <div style={{ overflowX: "auto", marginTop: 14 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 0, borderRadius: 2, overflow: "hidden", border: "1px solid var(--outline-subtle)", minWidth: isMobile ? 520 : undefined }}>
-                        {[
-                          { icon: "edit",          label: "You save a change"            },
-                          { icon: "arrow_forward", label: null                            },
-                          { icon: "upload",        label: "JSON written to R2"           },
-                          { icon: "arrow_forward", label: null                            },
-                          { icon: "autorenew",     label: "Cloudflare cache purged"      },
-                          { icon: "arrow_forward", label: null                            },
-                          { icon: "language",      label: "Visitors get fresh data instantly" },
-                        ].map((step, i) =>
-                          step.label === null ? (
-                            <span key={i} className="material-symbols-outlined" style={{ fontSize: 14, color: "var(--text-phantom)", padding: "0 2px", flexShrink: 0 }}>arrow_forward</span>
-                          ) : (
-                            <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 5, padding: "10px 8px", background: "var(--surface-mid)" }}>
-                              <span className="material-symbols-outlined" style={{ fontSize: 16, color: "var(--accent)" }}>{step.icon}</span>
-                              <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 10, fontWeight: 600, color: "var(--text-dim)", textAlign: "center", lineHeight: 1.3 }}>{step.label}</span>
-                            </div>
-                          )
-                        )}
-                      </div>
-                      </div>{/* end flow scroll wrapper */}
-
-                      {/* The problem */}
-                      <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif", marginBottom: 8 }}>The problem</div>
-                        <p style={{ margin: 0, fontFamily: "Manrope, sans-serif", fontSize: 12, color: "var(--text-dim)", lineHeight: 1.7 }}>
-                          Your masjid's website needs to show today's prayer times. But if every visitor's browser calls Jam3ah's server directly, that server gets hit thousands of times a day — expensive and slow.
-                        </p>
-                      </div>
-
-                      {/* The solution */}
-                      <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif", marginBottom: 8 }}>The solution — static file on a CDN</div>
-                        <p style={{ margin: 0, fontFamily: "Manrope, sans-serif", fontSize: 12, color: "var(--text-dim)", lineHeight: 1.7 }}>
-                          Instead of a live API, Jam3ah generates a single JSON file containing every prayer time for the entire year. This file lives on <strong style={{ color: "var(--on-surface)" }}>Cloudflare R2</strong> — object storage with a global CDN built in. Visitors fetch this file directly from Cloudflare's nearest edge server. Jam3ah's server is never involved in a visitor request.
-                        </p>
-                      </div>
-
-                      {/* What is R2 */}
-                      <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif", marginBottom: 8 }}>What is Cloudflare R2?</div>
-                        <p style={{ margin: 0, fontFamily: "Manrope, sans-serif", fontSize: 12, color: "var(--text-dim)", lineHeight: 1.7 }}>
-                          R2 is Cloudflare's file storage — similar to Amazon S3, but with <strong style={{ color: "var(--on-surface)" }}>zero egress fees</strong>. Egress means data leaving storage toward the user. AWS charges heavily for this. Cloudflare does not — because they own both the storage and the CDN network, so data never leaves their infrastructure.
-                        </p>
-                      </div>
-
-                      {/* What is a CDN edge */}
-                      <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif", marginBottom: 8 }}>What is a CDN edge node?</div>
-                        <p style={{ margin: 0, fontFamily: "Manrope, sans-serif", fontSize: 12, color: "var(--text-dim)", lineHeight: 1.7 }}>
-                          Cloudflare has hundreds of servers (edge nodes) spread around the world. When a visitor requests <code style={{ fontFamily: "monospace", fontSize: 11, color: "var(--on-surface-variant)" }}>prayers.json</code>, Cloudflare serves it from the node physically closest to that visitor — not from your server, not even from R2. R2 is only read when an edge node doesn't have a cached copy yet.
-                        </p>
-                      </div>
-
-                      {/* What happens on update */}
-                      <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif", marginBottom: 8 }}>What happens when you update prayer times?</div>
-                        <p style={{ margin: "0 0 10px", fontFamily: "Manrope, sans-serif", fontSize: 12, color: "var(--text-dim)", lineHeight: 1.7 }}>When you hit Save, Jam3ah does three things automatically:</p>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                          {[
-                            { n: "1", text: "Regenerates the full year JSON from your latest prayer schedule" },
-                            { n: "2", text: "Overwrites the file on Cloudflare R2 — same permanent URL, new content" },
-                            { n: "3", text: "Calls the Cloudflare Cache Purge API — all edge nodes instantly drop their stale copy" },
-                          ].map(({ n, text }) => (
-                            <div key={n} style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-                              <div style={{ width: 20, height: 20, borderRadius: "50%", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontFamily: "Manrope, sans-serif", fontSize: 10, fontWeight: 800, color: "var(--accent)" }}>{n}</div>
-                              <p style={{ margin: 0, fontFamily: "Manrope, sans-serif", fontSize: 12, color: "var(--text-dim)", lineHeight: 1.6, paddingTop: 2 }}>{text}</p>
-                            </div>
-                          ))}
-                        </div>
-                        <p style={{ margin: "10px 0 0", fontFamily: "Manrope, sans-serif", fontSize: 12, color: "var(--text-dim)", lineHeight: 1.7 }}>
-                          The next visitor anywhere in the world gets the updated file within seconds — without the masjid changing anything on their website.
-                        </p>
-                      </div>
-
-                      {/* Sample data */}
-                      <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif", marginBottom: 8 }}>Sample data</div>
-                        <div style={{ background: "var(--surface-mid)", border: "1px solid var(--outline-subtle)", borderRadius: 2, padding: "14px 16px", overflowX: "auto" }}>
-                          <pre style={{ margin: 0, fontFamily: "monospace", fontSize: 11.5, color: "var(--on-surface-variant)", lineHeight: 1.8 }}>{`{
-  "2026-04-25": {
-    "fajr":    { "adhan": "05:12", "iqama": "05:30" },
-    "dhuhr":   { "adhan": "13:16", "iqama": "13:30" },
-    "asr":     { "adhan": "16:48", "iqama": "17:00" },
-    "maghrib": { "adhan": "20:11", "iqama": "20:11" },
-    "isha":    { "adhan": "21:45", "iqama": "22:00" },
-    "jummah":  { "khutbah1": "13:00", "khutbah2": "14:15" }
-  },
-  "2026-04-26": {
-    "fajr":    { "adhan": "05:10", "iqama": "05:30" },
-    "dhuhr":   { "adhan": "13:16", "iqama": "13:30" },
-    "asr":     { "adhan": "16:49", "iqama": "17:00" },
-    "maghrib": { "adhan": "20:12", "iqama": "20:12" },
-    "isha":    { "adhan": "21:46", "iqama": "22:00" }
-  },
-  ...
-  "2026-12-31": { ... }
-}`}</pre>
-                        </div>
-                      </div>
-
-                      {/* Cost */}
-                      <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif", marginBottom: 8 }}>What does this cost?</div>
-                        <p style={{ margin: "0 0 10px", fontFamily: "Manrope, sans-serif", fontSize: 12, color: "var(--text-dim)", lineHeight: 1.7 }}>
-                          R2's free tier covers 10 GB storage, 1M writes, and 10M reads per month. Egress is always free. For thousands of masjids the CDN layer costs <strong style={{ color: "var(--on-surface)" }}>close to $0</strong>.
-                        </p>
-                        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr", gap: 8 }}>
-                          {[
-                            { label: "Storage",  value: "~50 MB",  sub: "for 1,000 masjids" },
-                            { label: "Writes",   value: "≈ saves", sub: "negligible"         },
-                            { label: "Egress",   value: "Free",    sub: "always, unlimited"  },
-                          ].map(({ label, value, sub }) => (
-                            <div key={label} style={{ padding: "10px 12px", background: "var(--surface-mid)", border: "1px solid var(--outline-subtle)", borderRadius: 2 }}>
-                              <div style={{ fontFamily: "Manrope, sans-serif", fontSize: 10, fontWeight: 700, color: "var(--text-ghost)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>{label}</div>
-                              <div style={{ fontFamily: "Manrope, sans-serif", fontSize: 14, fontWeight: 800, color: "var(--accent)" }}>{value}</div>
-                              <div style={{ fontFamily: "Manrope, sans-serif", fontSize: 10, color: "var(--text-faint)", marginTop: 2 }}>{sub}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                    </div>
-                  )}
-                </div>
-
-              </Card>
-            );
-          })()}
-
-          {/* ── Retake Setup Wizard ── */}
-          <div style={{ display: "flex", justifyContent: "flex-end" }}>
-            <button
-              onClick={() => navigate("/onboarding")}
-              style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, fontFamily: "Manrope, sans-serif", fontSize: 12, fontWeight: 700, color: "var(--text-ghost)", cursor: "pointer", transition: "border-color 0.15s, color 0.15s" }}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--outline)"; (e.currentTarget as HTMLElement).style.color = "var(--on-surface)"; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--outline-variant)"; (e.currentTarget as HTMLElement).style.color = "var(--text-ghost)"; }}>
-              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>replay</span>
-              Retake Setup Wizard
-            </button>
-          </div>
-
-        </div>
+    <div className="d-page d-page--narrow">
+      <div className="d-stack" style={{ gap: 8 }}>
+        <h1 className="d-h1">Settings</h1>
+        <p className="d-sub">Your masjid's details and how prayer times are worked out.</p>
       </div>
 
-
-      {/* ── Preset save confirmation modal ── */}
-      {showSaveConfirm && (() => {
-        const addedPresets   = prayerPresets.filter(p => !savedPrayerPresets.find(s => s.id === p.id));
-        const removedPresets = savedPrayerPresets.filter(s => !prayerPresets.find(p => p.id === s.id));
-        const changedPresets = prayerPresets.filter(p => {
-          const saved = savedPrayerPresets.find(s => s.id === p.id);
-          return saved && JSON.stringify(p) !== JSON.stringify(saved);
-        });
-        const changedMonths = Array.from({ length: 12 }, (_, i) => i + 1).filter(m =>
-          monthPresetMap[m] !== savedMonthPresetMap[m]
-        );
-
-        const FIELD_LABELS: Partial<Record<keyof PrayerPreset, string>> = {
-          method: "Method", madhab: "Asr School", highLatitudeRule: "High Latitude Rule",
-          polarCircleResolution: "Polar Circle", shafaq: "Shafaq", rounding: "Rounding",
-          fajrAngle: "Fajr Angle", ishaAngle: "Isha Angle",
-          ishaInterval: "Isha Interval", maghribAngle: "Maghrib Angle",
-          adjustFajr: "Adj Fajr", adjustSunrise: "Adj Sunrise", adjustDhuhr: "Adj Dhuhr",
-          adjustAsr: "Adj Asr", adjustMaghrib: "Adj Maghrib", adjustIsha: "Adj Isha",
-        };
-        const getPresetDiff = (p: PrayerPreset) => {
-          const saved = savedPrayerPresets.find(s => s.id === p.id);
-          if (!saved) return [];
-          return (Object.keys(FIELD_LABELS) as (keyof PrayerPreset)[])
-            .filter(k => p[k] !== saved[k])
-            .map(k => ({ key: k, label: FIELD_LABELS[k]!, from: saved[k] || "—", to: p[k] || "—" }));
-        };
-        const hasAnything = addedPresets.length || removedPresets.length || changedPresets.length || changedMonths.length;
-        const allMonthsAssigned = Array.from({ length: 12 }, (_, i) => i + 1).every(m => !!monthPresetMap[m]);
-
-        return (
-          <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)" }}
-               onClick={e => { if (e.target === e.currentTarget) setShowSaveConfirm(false); }}>
-            <div style={{ width: "100%", maxWidth: 500, margin: "0 16px", background: "var(--surface-low)", border: "1px solid var(--surface-high)", borderRadius: 2, overflow: "hidden", boxShadow: "0 24px 80px rgba(0,0,0,0.5)" }}>
-
-              {/* Header */}
-              <div style={{ padding: "18px 24px", borderBottom: "1px solid var(--outline-subtle)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div>
-                  <div style={{ fontFamily: "Manrope, sans-serif", fontSize: 15, fontWeight: 800, color: "var(--text-max)", letterSpacing: "-0.02em" }}>Review Changes</div>
-                  <div style={{ fontFamily: "Manrope, sans-serif", fontSize: 12, color: "var(--text-dim)", marginTop: 3 }}>Choose how to apply these preset changes</div>
-                </div>
-                <button onClick={() => setShowSaveConfirm(false)} style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, cursor: "pointer", color: "var(--text-ghost)" }}>
-                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>close</span>
-                </button>
-              </div>
-
-              {/* Body */}
-              <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 14, maxHeight: "55vh", overflowY: "auto" }}>
-                {!hasAnything && (
-                  <p style={{ margin: 0, fontFamily: "Manrope, sans-serif", fontSize: 13, color: "var(--text-dim)" }}>No changes detected.</p>
-                )}
-
-                {addedPresets.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif", marginBottom: 8 }}>Added</div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      {addedPresets.map((p, i) => (
-                        <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "rgba(52,211,153,0.06)", border: "1px solid rgba(52,211,153,0.2)", borderRadius: 2 }}>
-                          <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399", flexShrink: 0 }} />
-                          <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 12, fontWeight: 700, color: "var(--on-surface)" }}>New Preset {i + 1}</span>
-                          <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 11, color: "var(--text-ghost)" }}>{p.method}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {removedPresets.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif", marginBottom: 8 }}>Removed</div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      {removedPresets.map(p => {
-                        const idx = savedPrayerPresets.findIndex(s => s.id === p.id);
-                        return (
-                          <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 2 }}>
-                            <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#f87171", flexShrink: 0 }} />
-                            <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 12, fontWeight: 700, color: "var(--on-surface)" }}>Preset {idx + 1}</span>
-                            <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 11, color: "var(--text-ghost)" }}>{p.method}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {changedPresets.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif", marginBottom: 8 }}>Modified Presets</div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                      {changedPresets.map(p => {
-                        const idx  = prayerPresets.findIndex(x => x.id === p.id);
-                        const dot  = PRESET_DOTS[idx % PRESET_DOTS.length];
-                        const diff = getPresetDiff(p);
-                        return (
-                          <div key={p.id} style={{ background: "var(--surface-mid)", border: "1px solid var(--outline-subtle)", borderRadius: 2, overflow: "hidden" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", borderBottom: "1px solid var(--outline-subtle)" }}>
-                              <div style={{ width: 6, height: 6, borderRadius: "50%", background: dot, flexShrink: 0 }} />
-                              <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 12, fontWeight: 700, color: "var(--on-surface)" }}>Preset {idx + 1}</span>
-                              <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 11, color: "var(--text-faint)", marginLeft: 2 }}>{diff.length} change{diff.length !== 1 ? "s" : ""}</span>
-                            </div>
-                            <div style={{ display: "flex", flexDirection: "column" }}>
-                              {diff.map(({ key, label, from, to }) => (
-                                <div key={key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", borderBottom: "1px solid var(--outline-subtle)" }}>
-                                  <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 11, fontWeight: 600, color: "var(--text-ghost)", minWidth: 88, flexShrink: 0 }}>{label}</span>
-                                  <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 11, color: "#f87171", background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.18)", borderRadius: 2, padding: "1px 6px", maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{from}</span>
-                                  <span className="material-symbols-outlined" style={{ fontSize: 12, color: "var(--text-faint)", flexShrink: 0 }}>arrow_forward</span>
-                                  <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 11, color: "#34d399", background: "rgba(52,211,153,0.08)", border: "1px solid rgba(52,211,153,0.18)", borderRadius: 2, padding: "1px 6px", maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{to}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {changedMonths.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)", fontFamily: "Manrope, sans-serif", marginBottom: 8 }}>Month Assignments</div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                      {changedMonths.map(m => {
-                        const newId  = monthPresetMap[m];
-                        const newIdx = prayerPresets.findIndex(p => p.id === newId);
-                        const dot    = newIdx >= 0 ? PRESET_DOTS[newIdx % PRESET_DOTS.length] : "var(--outline)";
-                        return (
-                          <div key={m} style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", background: "var(--surface-mid)", border: "1px solid var(--outline-subtle)", borderRadius: 2 }}>
-                            <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 11, fontWeight: 700, color: "var(--on-surface)" }}>{MONTHS_SHORT[m - 1]}</span>
-                            <span className="material-symbols-outlined" style={{ fontSize: 11, color: "var(--text-faint)" }}>arrow_forward</span>
-                            {newIdx >= 0
-                              ? <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 11, fontWeight: 700, color: dot }}>Preset {newIdx + 1}</span>
-                              : <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 11, color: "var(--text-ghost)" }}>Unassigned</span>}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Footer */}
-              <div style={{ padding: "16px 24px", borderTop: "1px solid var(--outline-subtle)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                {!allMonthsAssigned && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span className="material-symbols-outlined" style={{ fontSize: 14, color: "#fbbf24" }}>warning</span>
-                    <span style={{ fontFamily: "Manrope, sans-serif", fontSize: 12, color: "#fbbf24", fontWeight: 600 }}>Assign all months before saving</span>
-                  </div>
-                )}
-                {allMonthsAssigned && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: "auto" }}>
-                    {hasGeneratedMonths && (
-                      <button onClick={() => { handleSavePresetsAndRegen(); setShowSaveConfirm(false); }} style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 18px", background: "transparent", border: "1px solid var(--accent-border)", borderRadius: 2, fontFamily: "Manrope, sans-serif", fontSize: 13, fontWeight: 700, color: "var(--accent)", cursor: "pointer" }}>
-                        <span className="material-symbols-outlined" style={{ fontSize: 14 }}>autorenew</span>
-                        Save & Regenerate
-                      </button>
-                    )}
-                    <button onClick={() => { handleSavePresetsOnly(); setShowSaveConfirm(false); }} style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 20px", background: "var(--accent)", color: "var(--accent-text)", border: "none", borderRadius: 2, fontFamily: "Manrope, sans-serif", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>save</span>
-                      Save
-                    </button>
-                  </div>
-                )}
-              </div>
-
-            </div>
+      <section className="d-card d-card-pad d-stack" style={{ gap: 20 }} aria-labelledby="det-h">
+        <h2 id="det-h" className="d-h2">Masjid details</h2>
+        {field("masjidName", "Masjid name", { autoComplete: "organization" })}
+        <div className="d-grid-2">
+          {field("phone", "Phone number", { placeholder: "e.g. 416 555 0100", help: "Shown on your TV screen and in the app.", autoComplete: "tel" })}
+          <div className="d-field">
+            <label className="d-label" htmlFor="g-email">Email</label>
+            <input id="g-email" className="d-input" value={registeredEmail || "—"} readOnly />
+            <p className="d-help">This is how you sign in. Contact us to change it.</p>
           </div>
-        );
-      })()}
+        </div>
+        {field("address", "Street address", { autoComplete: "street-address" })}
+        <div className="d-grid-3">
+          {field("city", "City", { autoComplete: "address-level2" })}
+          {field("province", "Province or state", { autoComplete: "address-level1" })}
+          {field("postalCode", "Postal code", { autoComplete: "postal-code" })}
+        </div>
+        {(generalDirty || savingGeneral) && (
+          <div className="d-row d-row--wrap" style={{ justifyContent: "flex-end", gap: 12, paddingTop: 4 }}>
+            <span className="d-strong" style={{ color: "var(--d-warn)", marginRight: "auto" }}>You have changes that are not saved yet.</span>
+            <button type="button" className="d-btn d-btn--secondary" onClick={() => setGeneral(savedGeneral)} disabled={savingGeneral}>Undo changes</button>
+            <button type="button" className="d-btn d-btn--primary" onClick={saveGeneral} disabled={savingGeneral}>{savingGeneral && <Spinner />}Save details</button>
+          </div>
+        )}
+      </section>
 
+      <section className="d-card d-card-pad d-stack" style={{ gap: 18 }} aria-labelledby="loc-h">
+        <div className="d-stack" style={{ gap: 4 }}>
+          <h2 id="loc-h" className="d-h2">Where is the masjid?</h2>
+          <span className="d-muted">Adhan times are worked out for this spot on the map.</span>
+        </div>
+        <LocationMap
+          latitude={location.latitude}
+          longitude={location.longitude}
+          dark={dark}
+          height={280}
+          readOnly={!editingPin}
+          onChange={editingPin ? (lat, lng) => setLocation({ latitude: lat, longitude: lng }) : undefined}
+        />
+        {editingPin && <p className="d-notice d-notice--accent" style={{ margin: 0 }}><Icon name="touch_app" />Click the map or drag the pin to where the masjid is.</p>}
+        <div className="d-row d-row--wrap" style={{ gap: 16, alignItems: "flex-end" }}>
+          <div className="d-field" style={{ flex: 1, minWidth: 260 }}>
+            <label className="d-label" htmlFor="loc-tz">Time zone</label>
+            <select id="loc-tz" className="d-select" value={location.timezone} onChange={e => setLocation({ timezone: e.target.value })}>
+              {TIMEZONES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+            </select>
+          </div>
+          <button type="button" className="d-btn d-btn--secondary" onClick={() => setEditingPin(v => !v)} aria-pressed={editingPin}>
+            <Icon name={editingPin ? "check" : "location_on"} />{editingPin ? "Done moving the pin" : "Move the pin"}
+          </button>
+        </div>
+      </section>
+
+      <section className="d-card d-card-pad d-stack" style={{ gap: 20 }} aria-labelledby="calc-h">
+        <div className="d-stack" style={{ gap: 4 }}>
+          <h2 id="calc-h" className="d-h2">How adhan times are worked out</h2>
+          <span className="d-muted">If you are not sure, keep these as they are and ask your imam.</span>
+        </div>
+
+        {single ? (
+          <>
+            <div className="d-field">
+              <label className="d-label" htmlFor="calc-method">Calculation method</label>
+              <select id="calc-method" className="d-select" value={single.method} onChange={e => onUpdatePreset(single.id, { method: e.target.value })}>
+                {CALC_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+              <p className="d-help">{METHOD_HELP[single.method] ?? "Ask your imam if you are not sure which method your masjid follows."}</p>
+            </div>
+            <div className="d-stack" style={{ gap: 10 }} role="radiogroup" aria-labelledby="asr-label">
+              <span id="asr-label" className="d-label">When does Asr start?</span>
+              <div className="d-grid-2" style={{ gap: 14 }}>
+                <Choice name="asr" checked={single.madhab !== "Hanafi"} onSelect={() => onUpdatePreset(single.id, { madhab: "Shafi" })} title="Standard" body="Shafi'i, Maliki and Hanbali. Asr starts earlier." />
+                <Choice name="asr" checked={single.madhab === "Hanafi"} onSelect={() => onUpdatePreset(single.id, { madhab: "Hanafi" })} title="Hanafi" body="Asr starts later in the afternoon." />
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="d-stack" style={{ gap: 0 }}>
+            <p className="d-muted" style={{ margin: "0 0 8px" }}>Your masjid uses different settings in different months:</p>
+            {presets.map(p => (
+              <div key={p.id} className="d-list-row">
+                <div className="d-stack" style={{ gap: 2 }}>
+                  <span className="d-strong">{monthsFor(p.id)}</span>
+                  <span className="d-muted d-small">{methodLabel(p.method)} · {p.madhab === "Hanafi" ? "Hanafi Asr" : "Standard Asr"}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button type="button" className="d-btn d-btn--secondary" style={{ alignSelf: "flex-start" }} onClick={() => setAdvancedOpen(true)}>
+          <Icon name="tune" />Advanced settings
+        </button>
+      </section>
+
+      {(calcDirty || savingCalculation) && (
+        <div className="d-card d-card-pad d-row d-row--wrap" style={{ gap: 12, position: "sticky", bottom: 16, zIndex: 5, boxShadow: "var(--d-shadow-pop)" }} role="region" aria-label="Unsaved changes">
+          <div className="d-stack" style={{ gap: 2, marginRight: "auto" }}>
+            <span className="d-strong" style={{ color: "var(--d-warn)" }}>Your location or prayer settings have changed.</span>
+            <span className="d-muted d-small">
+              {allMonthsAssigned ? "Save to use them. You can choose whether to update the prayer times you already have." : "Every month needs settings before you can save. Open Advanced settings."}
+            </span>
+          </div>
+          <button type="button" className="d-btn d-btn--secondary" onClick={() => { onUndoCalculation(); setEditingPin(false); }} disabled={savingCalculation}>Undo changes</button>
+          <button type="button" className="d-btn d-btn--primary" onClick={() => { onSaveCalculation(); setEditingPin(false); }} disabled={savingCalculation || !allMonthsAssigned}>
+            {savingCalculation && <Spinner />}Save changes
+          </button>
+        </div>
+      )}
+
+      <section className="d-card d-card-pad d-stack" style={{ gap: 0, paddingBottom: 8 }} aria-labelledby="jam-h">
+        <div className="d-stack" style={{ gap: 4, paddingBottom: 18 }}>
+          <h2 id="jam-h" className="d-h2">Extra jamaats</h2>
+          <span className="d-muted">Turn these on if your masjid holds more than one congregation. Jumu'ah times are set on the Prayer times page.</span>
+        </div>
+        <ToggleRow title="Second Fajr jamaat" body="Adds a second iqama time for Fajr." checked={jamaat.fajr2} onChange={v => onSetJamaat({ ...jamaat, fajr2: v, fajr3: v ? jamaat.fajr3 : false })} />
+        <ToggleRow title="Third Fajr jamaat" body="Needs the second Fajr jamaat to be on." checked={jamaat.fajr3} disabled={!jamaat.fajr2} onChange={v => onSetJamaat({ ...jamaat, fajr3: v })} />
+        <ToggleRow title="Second Maghrib jamaat" body="Adds a second iqama time for Maghrib." checked={jamaat.maghrib2} onChange={v => onSetJamaat({ ...jamaat, maghrib2: v, maghrib3: v ? jamaat.maghrib3 : false })} />
+        <ToggleRow title="Third Maghrib jamaat" body="Needs the second Maghrib jamaat to be on." checked={jamaat.maghrib3} disabled={!jamaat.maghrib2} onChange={v => onSetJamaat({ ...jamaat, maghrib3: v })} />
+      </section>
+
+      <section className="d-card d-card-pad d-row d-row--wrap" style={{ gap: 16 }} aria-labelledby="wiz-h">
+        <div className="d-stack" style={{ gap: 4, flex: 1, minWidth: 260 }}>
+          <h2 id="wiz-h" className="d-h3">Start again with the setup guide</h2>
+          <span className="d-muted">Walks you through location, calculation and iqama times step by step.</span>
+        </div>
+        <button type="button" className="d-btn d-btn--secondary" onClick={() => navigate("/onboarding")}><Icon name="restart_alt" />Open the setup guide</button>
+      </section>
+
+      {advancedOpen && (
+        <AdvancedCalcModal
+          presets={presets}
+          monthMap={monthMap}
+          onUpdate={onUpdatePreset}
+          onAdd={onAddPreset}
+          onDelete={onDeletePreset}
+          onSetMonth={onSetMonthPreset}
+          onClose={() => setAdvancedOpen(false)}
+        />
+      )}
     </div>
   );
 };

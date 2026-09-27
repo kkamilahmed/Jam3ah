@@ -10,5 +10,6 @@ export const supabase = createClient(URL, ANON);
 // Admin client — used ONLY in AdminPage to create auth users on approval
 // In production this should live in a server-side Edge Function
 export const supabaseAdmin = createClient(URL, SERVICE, {
-  auth: { autoRefreshToken: false, persistSession: false },
+  // Its own storage key so it does not clash with the normal client's session.
+  auth: { autoRefreshToken: false, persistSession: false, storageKey: "jam3ah-admin" },
 });

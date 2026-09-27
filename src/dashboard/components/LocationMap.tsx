@@ -5,33 +5,19 @@ import "leaflet/dist/leaflet.css";
 
 const pinIcon = L.divIcon({
   className: "jam3ah-pin",
-  iconSize: [28, 28],
-  iconAnchor: [14, 14],
-  html: `
-    <div style="width:28px;height:28px;position:relative;display:flex;align-items:center;justify-content:center;">
-      <div class="jam3ah-ping" style="position:absolute;width:28px;height:28px;background:rgba(52,211,153,0.15);border-radius:50%;"></div>
-      <div style="width:14px;height:14px;background:#34d399;border-radius:50%;border:2.5px solid #fff;box-shadow:0 0 12px rgba(52,211,153,0.6);position:relative;z-index:1;"></div>
-    </div>
-  `,
+  iconSize: [34, 44],
+  iconAnchor: [17, 42],
+  html: `<svg width="34" height="44" viewBox="0 0 34 44" aria-hidden="true"><path d="M17 43s15-13.6 15-26A15 15 0 0 0 2 17c0 12.4 15 26 15 26Z" fill="var(--d-accent, #1f5fad)" stroke="#fff" stroke-width="2.5"/><circle cx="17" cy="17" r="5.5" fill="#fff"/></svg>`,
 });
 
-// Flies to new coordinates on explicit trigger (button) or when lat/lng change after mount (autoCenter)
-const Recenter: React.FC<{ lat: number; lng: number; flyTrigger: number; autoCenter: boolean }> = ({ lat, lng, flyTrigger, autoCenter }) => {
+// Keeps the map centred on the pin when the coordinates change from outside the map.
+const Recenter: React.FC<{ lat: number; lng: number; flyTrigger: number }> = ({ lat, lng, flyTrigger }) => {
   const map = useMap();
-  const triggerMounted = useRef(false);
-  const autoCenterMounted = useRef(false);
-
+  const first = useRef(true);
   useEffect(() => {
-    if (!triggerMounted.current) { triggerMounted.current = true; return; }
-    map.flyTo([lat, lng], 15);
-  }, [flyTrigger]);
-
-  useEffect(() => {
-    if (!autoCenter) return;
-    if (!autoCenterMounted.current) { autoCenterMounted.current = true; return; }
-    map.setView([lat, lng], 15);
-  }, [lat, lng]);
-
+    if (first.current) { first.current = false; return; }
+    map.setView([lat, lng], Math.max(map.getZoom(), 15));
+  }, [lat, lng, flyTrigger, map]);
   return null;
 };
 
@@ -46,58 +32,46 @@ interface LocationMapProps {
   flyTrigger?: number;
   onChange?: (lat: string, lng: string) => void;
   readOnly?: boolean;
-  autoCenter?: boolean;
   height?: number | string;
+  dark?: boolean;
 }
 
 const LocationMap: React.FC<LocationMapProps> = ({
-  latitude, longitude, flyTrigger = 0, onChange,
-  readOnly = false, autoCenter = false, height = 300,
+  latitude, longitude, flyTrigger = 0, onChange, readOnly = false, height = 300, dark = false,
 }) => {
-  const lat = parseFloat(latitude) || 43.651070;
+  const lat = parseFloat(latitude) || 43.65107;
   const lng = parseFloat(longitude) || -79.347015;
+  const editable = !readOnly && !!onChange;
 
   return (
-    <div style={{ height, isolation: "isolate" }} className="rounded-2xl overflow-hidden border border-white/[0.07]">
+    <div className={`jam3ah-map${dark ? " is-dark" : ""}`} style={{ height, isolation: "isolate", borderRadius: "var(--d-r-btn, 10px)", overflow: "hidden", border: "1px solid var(--d-border, #e3dfd5)" }}>
       <style>{`
-        .leaflet-container { background: #09090b; }
         .jam3ah-pin { background: transparent !important; border: none !important; }
-        .jam3ah-ping { animation: jam3ah-ping 1.5s cubic-bezier(0,0,0.2,1) infinite; }
-        @keyframes jam3ah-ping { 75%, 100% { transform: scale(2); opacity: 0; } }
-        .leaflet-control-zoom {
-          border: 1px solid rgba(255,255,255,0.07) !important;
-          border-radius: 12px !important;
-          overflow: hidden;
-          box-shadow: none !important;
-        }
-        .leaflet-control-zoom a {
-          background: #18181b !important;
-          color: #a1a1aa !important;
-          border-bottom: 1px solid rgba(255,255,255,0.07) !important;
-          width: 32px !important; height: 32px !important;
-          line-height: 32px !important;
-          font-size: 16px !important;
-        }
-        .leaflet-control-zoom a:hover { background: #27272a !important; color: #fff !important; }
-        .leaflet-control-zoom-out { border-bottom: none !important; }
+        .jam3ah-map .leaflet-container { background: var(--d-surface-2, #f4f4f4); font-family: inherit; }
+        .jam3ah-map .leaflet-container img.leaflet-tile { mix-blend-mode: normal; }
+        .jam3ah-map.is-dark .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.95) contrast(0.9); }
+        .jam3ah-map .leaflet-control-zoom { border: 1px solid var(--d-border-strong, #ccc) !important; border-radius: var(--d-r-btn, 10px) !important; overflow: hidden; box-shadow: none !important; }
+        .jam3ah-map .leaflet-control-zoom a { width: 40px !important; height: 40px !important; line-height: 40px !important; font-size: 20px !important; background: var(--d-surface, #fff) !important; color: var(--d-text, #111) !important; border-bottom: 1px solid var(--d-border, #ddd) !important; }
+        .jam3ah-map .leaflet-control-zoom a:hover { background: var(--d-surface-2, #f4f4f4) !important; }
+        .jam3ah-map .leaflet-control-attribution { font-size: 12px; background: var(--d-surface, #fff) !important; color: var(--d-text-2, #555) !important; }
+        .jam3ah-map .leaflet-control-attribution a { color: var(--d-accent, #1f5fad) !important; }
       `}</style>
-      <MapContainer
-        center={[lat, lng]}
-        zoom={15}
-        style={{ height: "100%", width: "100%" }}
-        zoomControl={true}
-        attributionControl={false}>
-        <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />
-        <Recenter lat={lat} lng={lng} flyTrigger={flyTrigger} autoCenter={autoCenter} />
-        {!readOnly && onChange && <ClickHandler onMove={(la, lo) => onChange(la.toFixed(6), lo.toFixed(6))} />}
+      <MapContainer center={[lat, lng]} zoom={15} style={{ height: "100%", width: "100%" }} zoomControl scrollWheelZoom={false}>
+        <TileLayer
+          url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          maxZoom={19}
+        />
+        <Recenter lat={lat} lng={lng} flyTrigger={flyTrigger} />
+        {editable && <ClickHandler onMove={(la, lo) => onChange!(la.toFixed(6), lo.toFixed(6))} />}
         <Marker
           position={[lat, lng]}
           icon={pinIcon}
-          draggable={!readOnly}
-          eventHandlers={!readOnly && onChange ? {
+          draggable={editable}
+          eventHandlers={editable ? {
             dragend(e) {
-              const { lat: la, lng: lo } = (e.target as L.Marker).getLatLng();
-              onChange(la.toFixed(6), lo.toFixed(6));
+              const p = (e.target as L.Marker).getLatLng();
+              onChange!(p.lat.toFixed(6), p.lng.toFixed(6));
             },
           } : {}}
         />

@@ -1,17 +1,28 @@
 import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { Icon, Spinner } from "../dashboard/ui";
+import { useDashTheme } from "../dashboard/theme";
+import PublicHeader from "./PublicHeader";
+import "./PublicPages.css";
+
+// Supabase error text is written for developers; say the same thing in plain words.
+const friendlyError = (message: string) =>
+  message === "Invalid login credentials"
+    ? "That email and password do not match. Please check them and try again."
+    : message;
 
 const LoginPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const navigate = useNavigate();
+  const { dark, toggle, themeAttr } = useDashTheme();
 
   useEffect(() => {
     const token = localStorage.getItem("access_token") || sessionStorage.getItem("access_token");
     if (token) navigate("/home", { replace: true });
-  }, []);
+  }, [navigate]);
 
   const [formData, setFormData] = useState({ email: "", password: "", rememberMe: false });
 
@@ -25,7 +36,7 @@ const LoginPage: React.FC = () => {
     setIsLoading(true);
     setError("");
     if (!formData.email || !formData.password) {
-      setError("Please fill in all fields");
+      setError("Please enter your email address and your password.");
       setIsLoading(false);
       return;
     }
@@ -43,140 +54,96 @@ const LoginPage: React.FC = () => {
         .select("id, masjid_name, status, onboarding_complete")
         .eq("user_id", authData.user!.id)
         .single();
-      if (masjidError || !masjid) throw new Error("No masjid linked to this account.");
-      if (masjid.status === "suspended") throw new Error("Your masjid has been suspended. Contact support.");
+      if (masjidError || !masjid) throw new Error("We could not find a masjid for this account. Please check your email address, or register your masjid.");
+      if (masjid.status === "suspended") throw new Error("Your masjid's account has been paused. Please contact Jam3ah support.");
       storage.setItem("masjid_id", masjid.id);
       storage.setItem("masjid_name", masjid.masjid_name);
       storage.setItem("user_email", authData.user!.email ?? "");
       navigate(masjid.onboarding_complete ? "/home" : "/onboarding");
     } catch (err: unknown) {
-      setError((err as Error).message || "Login failed. Please try again.");
+      setError((err as Error).message || "Sign in did not work. Please try again.");
     } finally {
       setIsLoading(false);
     }
   };
 
-  const inp: React.CSSProperties = {
-    width: "100%", padding: "11px 12px 11px 44px", background: "var(--surface-low)",
-    border: "1px solid var(--outline-variant)", borderRadius: 2, color: "var(--on-surface)",
-    fontFamily: "Manrope, sans-serif", fontSize: 14, fontWeight: 500,
-    outline: "none", transition: "border-color 0.15s", boxSizing: "border-box",
-  };
-
   return (
-    <div style={{ minHeight: "100vh", backgroundColor: "var(--bg)", color: "var(--on-surface)", fontFamily: "Manrope, sans-serif", display: "flex", flexDirection: "column" }}>
+    <div className="dash" data-dash-theme={themeAttr}>
+      <a href="#main" className="d-sr-only">Skip to content</a>
+      <PublicHeader dark={dark} onToggleTheme={toggle}>
+        <Link to="/signup" className="d-btn d-btn--secondary d-btn--sm">
+          <span className="pub-hide-mobile">Register your masjid</span>
+          <span className="d-only-mobile">Register</span>
+        </Link>
+      </PublicHeader>
 
-      {/* Nav */}
-      <nav style={{ background: "var(--nav-bg)", backdropFilter: "blur(20px)", borderBottom: "1px solid var(--surface-high)", padding: "0 24px", height: 60, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }} onClick={() => navigate("/")}>
-          <div style={{ width: 28, height: 28, background: "var(--surface-high)", border: "1px solid var(--outline)", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <span className="material-symbols-outlined" style={{ fontSize: 15, color: "var(--on-surface)" }}>mosque</span>
+      <main id="main" className="pub-auth">
+        <div className="pub-auth-inner">
+          <div className="d-stack" style={{ gap: 8 }}>
+            <h1 className="d-h1">Welcome back</h1>
+            <p className="d-sub">Sign in to update your masjid's prayer times, events and news.</p>
           </div>
-          <span style={{ fontWeight: 700, fontSize: 15, color: "var(--on-surface)" }}>jam3ah</span>
-        </div>
-        <button
-          onClick={() => navigate("/signup")}
-          style={{ padding: "7px 14px", background: "transparent", border: "1px solid var(--outline-variant)", borderRadius: 2, color: "var(--on-surface-variant)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}
-        >
-          Register Masjid
-        </button>
-      </nav>
 
-      {/* Content */}
-      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 24px" }}>
-        <div style={{ width: "100%", maxWidth: 400 }}>
-
-          {/* Header */}
-          <div style={{ marginBottom: 32 }}>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2, fontSize: 11, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 16 }}>
-              Masjid Admin
+          <form
+            className="d-card d-card-pad pub-form"
+            noValidate
+            onSubmit={e => { e.preventDefault(); handleLogin(); }}
+          >
+            <div className="d-field">
+              <label className="d-label" htmlFor="login-email">Email address</label>
+              <input
+                id="login-email" className="d-input" type="email" name="email" autoComplete="email"
+                value={formData.email} onChange={handleChange} placeholder="you@yourmasjid.org"
+              />
             </div>
-            <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.03em", color: "var(--on-surface)", margin: "0 0 6px" }}>Welcome back</h1>
-            <p style={{ fontSize: 14, color: "var(--text-ghost)", margin: 0 }}>Sign in to your dashboard</p>
-          </div>
 
-          {/* Card */}
-          <div style={{ background: "var(--surface)", border: "1px solid var(--surface-high)", borderRadius: 2, padding: 28 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-
-              {/* Email */}
-              <div>
-                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--on-surface-variant)", marginBottom: 7, letterSpacing: "0.02em" }}>Email address</label>
-                <div style={{ position: "relative" }}>
-                  <span className="material-symbols-outlined" style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", fontSize: 18, color: "var(--text-phantom)", pointerEvents: "none" }}>mail</span>
-                  <input
-                    type="email" name="email" value={formData.email} onChange={handleChange}
-                    onKeyDown={e => e.key === "Enter" && handleLogin()}
-                    style={inp} placeholder="admin@yourmasjid.com"
-                    onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }}
-                    onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }}
-                  />
-                </div>
-              </div>
-
-              {/* Password */}
-              <div>
-                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--on-surface-variant)", marginBottom: 7 }}>Password</label>
-                <div style={{ position: "relative" }}>
-                  <span className="material-symbols-outlined" style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", fontSize: 18, color: "var(--text-phantom)", pointerEvents: "none" }}>lock</span>
-                  <input
-                    type={showPassword ? "text" : "password"} name="password" value={formData.password} onChange={handleChange}
-                    onKeyDown={e => e.key === "Enter" && handleLogin()}
-                    style={{ ...inp, paddingRight: 44 }} placeholder="Enter your password"
-                    onFocus={e => { e.target.style.borderColor = "var(--text-ghost)"; }}
-                    onBlur={e => { e.target.style.borderColor = "var(--outline-variant)"; }}
-                  />
-                  <button type="button" onClick={() => setShowPassword(!showPassword)}
-                    style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex" }}>
-                    <span className="material-symbols-outlined" style={{ fontSize: 18, color: "var(--text-phantom)" }}>{showPassword ? "visibility_off" : "visibility"}</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Remember me */}
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <input type="checkbox" name="rememberMe" checked={formData.rememberMe} onChange={handleChange}
-                  style={{ width: 15, height: 15, accentColor: "#c6c6c7", cursor: "pointer" }} id="rememberMe" />
-                <label htmlFor="rememberMe" style={{ fontSize: 13, color: "var(--text-faint)", cursor: "pointer", fontWeight: 500 }}>Remember me</label>
-              </div>
-
-              {/* Error */}
-              {error && (
-                <div style={{ padding: "10px 14px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 2 }}>
-                  <p style={{ color: "#f87171", fontSize: 13, margin: 0, fontWeight: 500 }}>{error}</p>
-                </div>
-              )}
-
-              {/* Submit */}
-              <button
-                onClick={handleLogin} disabled={isLoading}
-                style={{ width: "100%", padding: "12px", background: isLoading ? "var(--surface-mid)" : "var(--accent)", border: "1px solid transparent", borderRadius: 2, color: isLoading ? "var(--text-ghost)" : "var(--accent-text)", fontFamily: "Manrope, sans-serif", fontWeight: 700, fontSize: 14, cursor: isLoading ? "not-allowed" : "pointer", transition: "all 0.15s", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
-                onMouseEnter={e => { if (!isLoading) (e.currentTarget as HTMLElement).style.background = "var(--accent-light)"; }}
-                onMouseLeave={e => { if (!isLoading) (e.currentTarget as HTMLElement).style.background = "var(--accent)"; }}
-              >
-                {isLoading ? (
-                  <>
-                    <span className="material-symbols-outlined" style={{ fontSize: 16, animation: "spin 1s linear infinite" }}>progress_activity</span>
-                    Signing in...
-                  </>
-                ) : "Sign in"}
-              </button>
-
-              <div style={{ textAlign: "center", fontSize: 13, color: "var(--text-phantom)" }}>
-                Don't have an account?{" "}
-                <button onClick={() => navigate("/signup")} style={{ background: "none", border: "none", color: "var(--on-surface)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer", padding: 0 }}>
-                  Register your masjid
+            <div className="d-field">
+              <label className="d-label" htmlFor="login-password">Password</label>
+              <div className="pub-password">
+                <input
+                  id="login-password" className="d-input" type={showPassword ? "text" : "password"} name="password"
+                  autoComplete="current-password" value={formData.password} onChange={handleChange}
+                />
+                <button
+                  type="button"
+                  className="d-btn d-btn--ghost pub-password-toggle"
+                  onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showPassword}
+                >
+                  <Icon name={showPassword ? "visibility_off" : "visibility"} />
+                  {showPassword ? "Hide" : "Show"}
                 </button>
               </div>
             </div>
-          </div>
 
-          <p style={{ textAlign: "center", fontSize: 11, color: "var(--outline-variant)", marginTop: 24 }}>
-            By signing in, you agree to our Terms of Service and Privacy Policy
-          </p>
+            <label className="pub-check" htmlFor="rememberMe">
+              <input type="checkbox" id="rememberMe" name="rememberMe" checked={formData.rememberMe} onChange={handleChange} />
+              Keep me signed in on this device
+            </label>
+
+            {error && (
+              <div className="d-notice d-notice--danger" role="alert">
+                <Icon name="error" />
+                <span>{friendlyError(error)}</span>
+              </div>
+            )}
+
+            <button type="submit" className="d-btn d-btn--primary pub-btn-full" disabled={isLoading}>
+              {isLoading ? <><Spinner />Signing in...</> : "Sign in"}
+            </button>
+          </form>
+
+          <div className="d-stack pub-center" style={{ gap: 10 }}>
+            <p className="d-muted" style={{ margin: 0 }}>
+              New to Jam3ah? <Link to="/signup" className="d-link">Register your masjid</Link>
+            </p>
+            <p className="d-faint d-small" style={{ margin: 0 }}>
+              By signing in, you agree to our Terms of Service and Privacy Policy.
+            </p>
+          </div>
         </div>
-      </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </main>
     </div>
   );
 };

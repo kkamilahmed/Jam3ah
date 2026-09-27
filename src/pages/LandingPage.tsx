@@ -1,189 +1,154 @@
 import React, { useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import useIsMobile from "../hooks/useIsMobile";
+import { Link, useNavigate } from "react-router-dom";
+import { Icon } from "../dashboard/ui";
+import { useDashTheme } from "../dashboard/theme";
+import PublicHeader from "./PublicHeader";
+import "./PublicPages.css";
+
+const STATS = [
+  { value: "120+", label: "Masjids registered" },
+  { value: "50K+", label: "Community members" },
+  { value: "10K+", label: "Events shared" },
+];
+
+const FEATURES = [
+  { icon: "schedule", title: "Prayer times", desc: "Upload your monthly timetable or let us work it out from your location. Set iqama times once." },
+  { icon: "calendar_month", title: "Events", desc: "Share Friday talks, classes and fundraisers so everyone knows what is on." },
+  { icon: "campaign", title: "Announcements", desc: "Post news in a minute and your community sees it straight away." },
+  { icon: "tv", title: "TV screen", desc: "Show prayer times and news on a screen in the masjid. It updates by itself." },
+  { icon: "group", title: "Your community", desc: "People follow your masjid and get your updates without you chasing them." },
+  { icon: "verified", title: "Checked masjids", desc: "We review every masjid before it joins, so people can trust what they see." },
+];
+
+const STEPS = [
+  { title: "Register your masjid", desc: "Fill in a short form about your masjid. It takes a few minutes." },
+  { title: "We check your details", desc: "Our team reviews your request and emails you your sign-in details." },
+  { title: "Start sharing", desc: "Sign in, add your prayer times and post your first announcement." },
+];
+
+// A sample of what a masjid's page shows. Illustration only.
+const SAMPLE = [
+  { name: "Fajr", time: "5:52 AM", iqama: "6:22 AM" },
+  { name: "Dhuhr", time: "1:09 PM", iqama: "1:39 PM", next: true },
+  { name: "Asr", time: "4:26 PM", iqama: "4:56 PM" },
+  { name: "Maghrib", time: "7:05 PM", iqama: "7:08 PM" },
+  { name: "Isha", time: "8:24 PM", iqama: "8:54 PM" },
+];
 
 const LandingPage: React.FC = () => {
   const navigate = useNavigate();
-  const isMobile = useIsMobile();
+  const { dark, toggle, themeAttr } = useDashTheme();
 
   useEffect(() => {
     const token = localStorage.getItem("access_token") || sessionStorage.getItem("access_token");
     if (token) navigate("/home", { replace: true });
-  }, []);
+  }, [navigate]);
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: "var(--bg)", color: "var(--on-surface)", fontFamily: "Manrope, sans-serif" }}>
+    <div className="dash" data-dash-theme={themeAttr}>
+      <a href="#main" className="d-sr-only">Skip to content</a>
+      <PublicHeader dark={dark} onToggleTheme={toggle}>
+        <Link to="/login" className="d-btn d-btn--secondary d-btn--sm">Sign in</Link>
+        <Link to="/signup" className="d-btn d-btn--primary d-btn--sm pub-hide-mobile">Register your masjid</Link>
+      </PublicHeader>
 
-      {/* Nav */}
-      <nav style={{ background: "var(--nav-bg)", backdropFilter: "blur(20px)", borderBottom: "1px solid var(--outline-variant)", position: "fixed", top: 0, width: "100%", zIndex: 50 }}>
-        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 24px", height: 64, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 32, height: 32, background: "var(--surface-high)", border: "1px solid var(--outline)", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <span className="material-symbols-outlined" style={{ fontSize: 18, color: "var(--on-surface)" }}>mosque</span>
+      <main id="main">
+        <section className="lp-wrap lp-hero" aria-labelledby="lp-title">
+          <div className="lp-hero-text">
+            <span className="d-badge lp-badge"><Icon name="mosque" />For masjid teams and volunteers</span>
+            <h1 id="lp-title" className="d-h1 lp-title">
+              Your masjid, <span className="lp-title-accent">in one place.</span>
+            </h1>
+            <p className="lp-lead">
+              Keep prayer times, events and announcements up to date for your whole community. Simple enough for anyone on your team.
+            </p>
+            <div className="lp-actions">
+              <Link to="/signup" className="d-btn d-btn--primary">Register your masjid</Link>
+              <Link to="/login" className="d-btn d-btn--secondary">Sign in to your dashboard</Link>
             </div>
-            <span style={{ fontWeight: 700, fontSize: 16, color: "var(--on-surface)", letterSpacing: "-0.01em" }}>jam3ah</span>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              onClick={() => navigate("/login")}
-              style={{ padding: isMobile ? "8px 12px" : "8px 16px", background: "transparent", border: "1px solid var(--outline)", borderRadius: 2, color: "var(--on-surface-variant)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer", transition: "all 0.15s" }}
-              onMouseEnter={e => { (e.target as HTMLElement).style.background = "var(--surface-high)"; (e.target as HTMLElement).style.color = "var(--on-surface)"; }}
-              onMouseLeave={e => { (e.target as HTMLElement).style.background = "transparent"; (e.target as HTMLElement).style.color = "var(--on-surface-variant)"; }}
-            >
-              Sign in
-            </button>
-            {!isMobile && (
-              <button
-                onClick={() => navigate("/signup")}
-                style={{ padding: "8px 16px", background: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 2, color: "var(--accent-text)", fontFamily: "Manrope, sans-serif", fontWeight: 700, fontSize: 13, cursor: "pointer", transition: "all 0.15s" }}
-                onMouseEnter={e => { (e.target as HTMLElement).style.background = "var(--accent-light)"; }}
-                onMouseLeave={e => { (e.target as HTMLElement).style.background = "var(--accent)"; }}
-              >
-                Register Masjid
-              </button>
-            )}
-          </div>
-        </div>
-      </nav>
 
-      {/* Hero */}
-      <div style={{ paddingTop: 160, paddingBottom: 80, textAlign: "center", padding: "160px 24px 80px" }}>
-        <div style={{ maxWidth: 760, margin: "0 auto" }}>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2, fontSize: 11, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 32 }}>
-            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>communities</span>
-            Connecting Muslim Communities
-          </div>
-          <h1 style={{ fontSize: "clamp(42px, 7vw, 72px)", fontWeight: 800, lineHeight: 1.05, letterSpacing: "-0.03em", color: "var(--on-surface)", marginBottom: 24, margin: "0 0 24px" }}>
-            Your Masjid,{" "}
-            <span style={{ color: "var(--accent)" }}>Connected.</span>
-          </h1>
-          <p style={{ fontSize: 18, color: "var(--text-faint)", maxWidth: 520, margin: "0 auto 40px", lineHeight: 1.65, fontWeight: 400 }}>
-            One platform to manage prayer times, post events, and keep your community informed — all in one place.
-          </p>
-          <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
-            <button
-              onClick={() => navigate("/signup")}
-              style={{ padding: "12px 28px", background: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 2, color: "var(--accent-text)", fontFamily: "Manrope, sans-serif", fontWeight: 700, fontSize: 14, cursor: "pointer", transition: "all 0.15s" }}
-              onMouseEnter={e => { (e.target as HTMLElement).style.background = "var(--accent-light)"; }}
-              onMouseLeave={e => { (e.target as HTMLElement).style.background = "var(--accent)"; }}
-            >
-              Register Your Masjid
-            </button>
-            <button
-              onClick={() => navigate("/login")}
-              style={{ padding: "12px 28px", background: "transparent", border: "1px solid var(--outline)", borderRadius: 2, color: "var(--on-surface-variant)", fontFamily: "Manrope, sans-serif", fontWeight: 600, fontSize: 14, cursor: "pointer", transition: "all 0.15s" }}
-              onMouseEnter={e => { (e.target as HTMLElement).style.background = "var(--surface-high)"; (e.target as HTMLElement).style.color = "var(--on-surface)"; }}
-              onMouseLeave={e => { (e.target as HTMLElement).style.background = "transparent"; (e.target as HTMLElement).style.color = "var(--on-surface-variant)"; }}
-            >
-              Sign in to Dashboard
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Stats */}
-      <div style={{ borderTop: "1px solid var(--surface-high)", borderBottom: "1px solid var(--surface-high)", background: "var(--surface)", padding: "48px 24px" }}>
-        <div style={{ maxWidth: 800, margin: "0 auto", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(3,1fr)", gap: isMobile ? 24 : 32, textAlign: "center" }}>
-          {[
-            { value: "120+", label: "Masjids Registered" },
-            { value: "50K+", label: "Community Members" },
-            { value: "10K+", label: "Events Published" },
-          ].map((s, i) => (
-            <div key={i}>
-              <div style={{ fontSize: 40, fontWeight: 800, color: "var(--accent)", letterSpacing: "-0.03em", marginBottom: 4 }}>{s.value}</div>
-              <div style={{ fontSize: 13, color: "var(--text-ghost)", fontWeight: 500 }}>{s.label}</div>
+          <div className="d-card d-card--clip lp-preview" aria-label="Example of the prayer times your community sees">
+            <div className="lp-preview-head">
+              <span className="d-h3">Today's prayer times</span>
+              <span className="d-muted d-small">Example of what your community sees</span>
             </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Features */}
-      <div style={{ padding: "80px 24px" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-          <div style={{ textAlign: "center", marginBottom: 56 }}>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2, fontSize: 11, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 24 }}>
-              Features
-            </div>
-            <h2 style={{ fontSize: "clamp(28px, 4vw, 42px)", fontWeight: 800, letterSpacing: "-0.03em", color: "var(--on-surface)", margin: 0 }}>
-              Everything your masjid needs
-            </h2>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px,1fr))", gap: 2 }}>
-            {[
-              { icon: "schedule", title: "Prayer Times", desc: "Upload monthly schedules or auto-generate from your location. Always accurate." },
-              { icon: "calendar_month", title: "Events", desc: "Create and publish events — from Friday lectures to fundraisers." },
-              { icon: "campaign", title: "Announcements", desc: "Send instant announcements to all subscribers whenever it matters most." },
-              { icon: "analytics", title: "Analytics", desc: "Track engagement with clear insights into your community activity." },
-              { icon: "group", title: "Subscribers", desc: "Community subscribes and receives updates automatically." },
-              { icon: "verified", title: "Verified Network", desc: "Every masjid is reviewed before joining — a trusted directory." },
-            ].map((f, i) => (
-              <div key={i} style={{ padding: "32px 28px", background: "var(--surface)", border: "1px solid var(--surface-high)", transition: "border-color 0.15s", cursor: "default" }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--outline)"; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--surface-high)"; }}>
-                <div style={{ width: 40, height: 40, background: "var(--surface-mid)", border: "1px solid var(--outline-variant)", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 20 }}>
-                  <span className="material-symbols-outlined" style={{ fontSize: 20, color: "var(--on-surface-variant)" }}>{f.icon}</span>
+            {SAMPLE.map(p => (
+              <div key={p.name} className={`lp-prow${p.next ? " is-next" : ""}`}>
+                <div className="d-stack" style={{ gap: 0 }}>
+                  <span className="d-pname">{p.name}</span>
+                  {p.next && <span className="d-ptag">Next prayer</span>}
                 </div>
-                <div style={{ fontWeight: 700, fontSize: 15, color: "var(--on-surface)", marginBottom: 8 }}>{f.title}</div>
-                <div style={{ fontSize: 13, color: "var(--text-ghost)", lineHeight: 1.6 }}>{f.desc}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* How it works */}
-      <div style={{ padding: "80px 24px", background: "#0a0a0a", borderTop: "1px solid var(--surface-mid)", borderBottom: "1px solid var(--surface-mid)" }}>
-        <div style={{ maxWidth: 680, margin: "0 auto" }}>
-          <div style={{ textAlign: "center", marginBottom: 48 }}>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 2, fontSize: 11, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 24 }}>
-              How It Works
-            </div>
-            <h2 style={{ fontSize: "clamp(24px, 3.5vw, 36px)", fontWeight: 800, letterSpacing: "-0.03em", color: "var(--on-surface)", margin: 0 }}>
-              Up and running in minutes
-            </h2>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {[
-              { step: "01", title: "Register your masjid", desc: "Fill in your masjid details and submit a registration request. Takes a few minutes." },
-              { step: "02", title: "Get approved", desc: "Our admin team reviews your registration and activates your account quickly." },
-              { step: "03", title: "Start managing", desc: "Log in, upload prayer times, create events, and send announcements to your community." },
-            ].map((item, i) => (
-              <div key={i} style={{ display: "flex", gap: 24, padding: "28px 24px", background: "var(--surface)", border: "1px solid var(--surface-high)" }}>
-                <div style={{ fontSize: 13, fontWeight: 800, color: "var(--outline)", fontVariantNumeric: "tabular-nums", minWidth: 28, paddingTop: 2 }}>{item.step}</div>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 15, color: "var(--on-surface)", marginBottom: 6 }}>{item.title}</div>
-                  <div style={{ fontSize: 13, color: "var(--text-ghost)", lineHeight: 1.6 }}>{item.desc}</div>
+                <div className="d-stack" style={{ gap: 0, alignItems: "flex-end" }}>
+                  <span className="d-ptime d-ptime--strong">{p.iqama}</span>
+                  <span className="d-prule">Adhan {p.time}</span>
                 </div>
               </div>
             ))}
+            <p className="lp-preview-note">
+              <Icon name="campaign" />
+              <span><strong>Friday talk after Isha.</strong> Everyone is welcome.</span>
+            </p>
           </div>
-        </div>
-      </div>
+        </section>
 
-      {/* CTA */}
-      <div style={{ padding: "80px 24px", textAlign: "center" }}>
-        <div style={{ maxWidth: 560, margin: "0 auto" }}>
-          <h2 style={{ fontSize: "clamp(24px, 3.5vw, 40px)", fontWeight: 800, letterSpacing: "-0.03em", color: "var(--on-surface)", marginBottom: 16 }}>
-            Ready to connect your community?
-          </h2>
-          <p style={{ fontSize: 15, color: "var(--text-ghost)", marginBottom: 32, lineHeight: 1.6 }}>
-            Join masjids across North America who trust jam3ah to manage their community.
-          </p>
-          <button
-            onClick={() => navigate("/signup")}
-            style={{ padding: "14px 32px", background: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 2, color: "var(--accent-text)", fontFamily: "Manrope, sans-serif", fontWeight: 700, fontSize: 14, cursor: "pointer", transition: "all 0.15s" }}
-            onMouseEnter={e => { (e.target as HTMLElement).style.background = "var(--accent-light)"; }}
-            onMouseLeave={e => { (e.target as HTMLElement).style.background = "var(--accent)"; }}
-          >
-            Register Your Masjid
-          </button>
+        <div className="lp-band">
+          <ul className="lp-wrap lp-stats" aria-label="Jam3ah in numbers">
+            {STATS.map(s => (
+              <li key={s.label}>
+                <span className="lp-stat-value">{s.value}</span>
+                <span className="lp-stat-label">{s.label}</span>
+              </li>
+            ))}
+          </ul>
         </div>
-      </div>
 
-      {/* Footer */}
-      <div style={{ borderTop: "1px solid var(--surface-mid)", padding: "24px", textAlign: "center" }}>
-        <div style={{ fontSize: 12, color: "var(--outline)" }}>© 2026 jam3ah · Built for Muslim communities</div>
-      </div>
+        <section className="lp-wrap lp-section" aria-labelledby="lp-features">
+          <div className="lp-section-head">
+            <h2 id="lp-features" className="d-h2 lp-section-title">Everything your masjid needs</h2>
+            <p className="d-sub">One simple dashboard for the jobs you do every week.</p>
+          </div>
+          <div className="d-grid-3" style={{ gap: 20 }}>
+            {FEATURES.map(f => (
+              <div key={f.title} className="d-card d-card-pad lp-feature">
+                <div className="pub-icon-chip"><Icon name={f.icon} /></div>
+                <h3 className="d-h3">{f.title}</h3>
+                <p>{f.desc}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div className="lp-band">
+          <section className="lp-wrap lp-section" aria-labelledby="lp-how">
+            <div className="lp-section-head">
+              <h2 id="lp-how" className="d-h2 lp-section-title">How to get started</h2>
+              <p className="d-sub">Most masjids are up and running within a day.</p>
+            </div>
+            <ol className="lp-steps">
+              {STEPS.map((s, i) => (
+                <li key={s.title} className="lp-step">
+                  <span className="pub-step" aria-hidden="true">{i + 1}</span>
+                  <h3 className="d-h3"><span className="d-sr-only">Step {i + 1}: </span>{s.title}</h3>
+                  <p>{s.desc}</p>
+                </li>
+              ))}
+            </ol>
+          </section>
+        </div>
+
+        <section className="lp-wrap lp-section" aria-labelledby="lp-cta">
+          <div className="d-card lp-cta">
+            <h2 id="lp-cta" className="d-h2 lp-section-title">Ready to bring your community together?</h2>
+            <p className="d-sub">Masjids across North America use Jam3ah to keep everyone informed.</p>
+            <div className="lp-actions">
+              <Link to="/signup" className="d-btn d-btn--primary">Register your masjid</Link>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer className="pub-footer">© 2026 Jam3ah · Made for Muslim communities</footer>
     </div>
   );
 };

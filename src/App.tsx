@@ -1,30 +1,35 @@
 import './App.css'
+import { lazy, Suspense } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 
-import SignupPage    from './pages/SignupPage';
-import LandingPage   from './pages/LandingPage';
-import LoginPage     from './pages/LoginPage';
-import HomePage      from './pages/HomePage';
-import AdminPage     from './pages/AdminPage';
-import WelcomePage   from './pages/WelcomePage';
-import NotFoundPage  from './pages/NotFoundPage';
-import TvScreenPage  from './pages/TvScreenPage';
+// Each page loads on demand so the landing and login pages stay small
+// (the dashboard pulls in Excel import and maps).
+const SignupPage   = lazy(() => import('./pages/SignupPage'));
+const LandingPage  = lazy(() => import('./pages/LandingPage'));
+const LoginPage    = lazy(() => import('./pages/LoginPage'));
+const HomePage     = lazy(() => import('./pages/HomePage'));
+const AdminPage    = lazy(() => import('./pages/AdminPage'));
+const WelcomePage  = lazy(() => import('./pages/WelcomePage'));
+const NotFoundPage = lazy(() => import('./pages/NotFoundPage'));
+const TvScreenPage = lazy(() => import('./pages/TvScreenPage'));
 
 function App() {
   return (
     <Router>
-      <Routes>
-        <Route path="/home/tvscreen"   element={<TvScreenPage />} />
-        <Route path="/home"            element={<Navigate to="/home/overview" replace />} />
-        <Route path="/home/:tab"       element={<HomePage />} />
-        <Route path="/dashboard"       element={<Navigate to="/home/overview" replace />} />
-        <Route path="/onboarding"      element={<WelcomePage />} />
-        <Route path="/login"           element={<LoginPage />} />
-        <Route path="/signup"          element={<SignupPage />} />
-        <Route path="/"                element={<LandingPage />} />
-        <Route path="/admin"           element={<AdminPage />} />
-        <Route path="*"                element={<NotFoundPage />} />
-      </Routes>
+      <Suspense fallback={null}>
+        <Routes>
+          <Route path="/home/tvscreen"   element={<TvScreenPage />} />
+          <Route path="/home"            element={<Navigate to="/home/overview" replace />} />
+          <Route path="/home/:tab"       element={<HomePage />} />
+          <Route path="/dashboard"       element={<Navigate to="/home/overview" replace />} />
+          <Route path="/onboarding"      element={<WelcomePage />} />
+          <Route path="/login"           element={<LoginPage />} />
+          <Route path="/signup"          element={<SignupPage />} />
+          <Route path="/"                element={<LandingPage />} />
+          <Route path="/admin"           element={<AdminPage />} />
+          <Route path="*"                element={<NotFoundPage />} />
+        </Routes>
+      </Suspense>
     </Router>
   );
 }

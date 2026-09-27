@@ -22,85 +22,85 @@ export const CALC_METHODS = [
 
 export const TIMEZONES: { value: string; label: string }[] = [
   // North America
-  { value: "America/Toronto",               label: "Eastern Time — Toronto" },
-  { value: "America/New_York",              label: "Eastern Time — New York" },
-  { value: "America/Chicago",               label: "Central Time — Chicago" },
-  { value: "America/Winnipeg",              label: "Central Time — Winnipeg" },
-  { value: "America/Denver",               label: "Mountain Time — Denver" },
-  { value: "America/Edmonton",              label: "Mountain Time — Edmonton" },
-  { value: "America/Phoenix",               label: "Mountain Time — Phoenix (no DST)" },
-  { value: "America/Los_Angeles",           label: "Pacific Time — Los Angeles" },
-  { value: "America/Vancouver",             label: "Pacific Time — Vancouver" },
-  { value: "America/Halifax",               label: "Atlantic Time — Halifax" },
-  { value: "America/St_Johns",              label: "Newfoundland Time — St. John's" },
+  { value: "America/Toronto",               label: "Eastern Time, Toronto" },
+  { value: "America/New_York",              label: "Eastern Time, New York" },
+  { value: "America/Chicago",               label: "Central Time, Chicago" },
+  { value: "America/Winnipeg",              label: "Central Time, Winnipeg" },
+  { value: "America/Denver",               label: "Mountain Time, Denver" },
+  { value: "America/Edmonton",              label: "Mountain Time, Edmonton" },
+  { value: "America/Phoenix",               label: "Mountain Time, Phoenix (no DST)" },
+  { value: "America/Los_Angeles",           label: "Pacific Time, Los Angeles" },
+  { value: "America/Vancouver",             label: "Pacific Time, Vancouver" },
+  { value: "America/Halifax",               label: "Atlantic Time, Halifax" },
+  { value: "America/St_Johns",              label: "Newfoundland Time, St. John's" },
   // South & Central America
-  { value: "America/Sao_Paulo",             label: "Brasília Time — São Paulo" },
-  { value: "America/Argentina/Buenos_Aires",label: "Argentina Time — Buenos Aires" },
-  { value: "America/Bogota",                label: "Colombia Time — Bogotá" },
+  { value: "America/Sao_Paulo",             label: "Brasília Time, São Paulo" },
+  { value: "America/Argentina/Buenos_Aires",label: "Argentina Time, Buenos Aires" },
+  { value: "America/Bogota",                label: "Colombia Time, Bogotá" },
   // Europe
-  { value: "Europe/London",                 label: "GMT / BST — London" },
-  { value: "Europe/Dublin",                 label: "GMT / IST — Dublin" },
-  { value: "Europe/Lisbon",                 label: "Western European Time — Lisbon" },
-  { value: "Europe/Paris",                  label: "Central European Time — Paris" },
-  { value: "Europe/Berlin",                 label: "Central European Time — Berlin" },
-  { value: "Europe/Amsterdam",              label: "Central European Time — Amsterdam" },
-  { value: "Europe/Brussels",               label: "Central European Time — Brussels" },
-  { value: "Europe/Rome",                   label: "Central European Time — Rome" },
-  { value: "Europe/Madrid",                 label: "Central European Time — Madrid" },
-  { value: "Europe/Stockholm",              label: "Central European Time — Stockholm" },
-  { value: "Europe/Oslo",                   label: "Central European Time — Oslo" },
-  { value: "Europe/Warsaw",                 label: "Central European Time — Warsaw" },
-  { value: "Europe/Athens",                 label: "Eastern European Time — Athens" },
-  { value: "Europe/Istanbul",               label: "Turkey Time — Istanbul" },
-  { value: "Europe/Moscow",                 label: "Moscow Time — Moscow" },
+  { value: "Europe/London",                 label: "GMT / BST, London" },
+  { value: "Europe/Dublin",                 label: "GMT / IST, Dublin" },
+  { value: "Europe/Lisbon",                 label: "Western European Time, Lisbon" },
+  { value: "Europe/Paris",                  label: "Central European Time, Paris" },
+  { value: "Europe/Berlin",                 label: "Central European Time, Berlin" },
+  { value: "Europe/Amsterdam",              label: "Central European Time, Amsterdam" },
+  { value: "Europe/Brussels",               label: "Central European Time, Brussels" },
+  { value: "Europe/Rome",                   label: "Central European Time, Rome" },
+  { value: "Europe/Madrid",                 label: "Central European Time, Madrid" },
+  { value: "Europe/Stockholm",              label: "Central European Time, Stockholm" },
+  { value: "Europe/Oslo",                   label: "Central European Time, Oslo" },
+  { value: "Europe/Warsaw",                 label: "Central European Time, Warsaw" },
+  { value: "Europe/Athens",                 label: "Eastern European Time, Athens" },
+  { value: "Europe/Istanbul",               label: "Turkey Time, Istanbul" },
+  { value: "Europe/Moscow",                 label: "Moscow Time, Moscow" },
   // Africa
-  { value: "Africa/Casablanca",             label: "Western European Time — Casablanca" },
-  { value: "Africa/Algiers",                label: "Central European Time — Algiers" },
-  { value: "Africa/Tunis",                  label: "Central European Time — Tunis" },
-  { value: "Africa/Tripoli",                label: "Eastern European Time — Tripoli" },
-  { value: "Africa/Cairo",                  label: "Eastern European Time — Cairo" },
-  { value: "Africa/Khartoum",              label: "Central Africa Time — Khartoum" },
-  { value: "Africa/Addis_Ababa",            label: "East Africa Time — Addis Ababa" },
-  { value: "Africa/Nairobi",                label: "East Africa Time — Nairobi" },
-  { value: "Africa/Lagos",                  label: "West Africa Time — Lagos" },
-  { value: "Africa/Accra",                  label: "GMT — Accra" },
-  { value: "Africa/Johannesburg",           label: "South Africa Time — Johannesburg" },
+  { value: "Africa/Casablanca",             label: "Western European Time, Casablanca" },
+  { value: "Africa/Algiers",                label: "Central European Time, Algiers" },
+  { value: "Africa/Tunis",                  label: "Central European Time, Tunis" },
+  { value: "Africa/Tripoli",                label: "Eastern European Time, Tripoli" },
+  { value: "Africa/Cairo",                  label: "Eastern European Time, Cairo" },
+  { value: "Africa/Khartoum",              label: "Central Africa Time, Khartoum" },
+  { value: "Africa/Addis_Ababa",            label: "East Africa Time, Addis Ababa" },
+  { value: "Africa/Nairobi",                label: "East Africa Time, Nairobi" },
+  { value: "Africa/Lagos",                  label: "West Africa Time, Lagos" },
+  { value: "Africa/Accra",                  label: "GMT, Accra" },
+  { value: "Africa/Johannesburg",           label: "South Africa Time, Johannesburg" },
   // Middle East
-  { value: "Asia/Tehran",                   label: "Iran Time — Tehran" },
-  { value: "Asia/Aden",                     label: "Arabia Time — Aden" },
-  { value: "Asia/Riyadh",                   label: "Arabia Time — Riyadh" },
-  { value: "Asia/Kuwait",                   label: "Arabia Time — Kuwait" },
-  { value: "Asia/Qatar",                    label: "Arabia Time — Doha" },
-  { value: "Asia/Bahrain",                  label: "Arabia Time — Manama" },
-  { value: "Asia/Dubai",                    label: "Gulf Time — Dubai" },
-  { value: "Asia/Muscat",                   label: "Gulf Time — Muscat" },
-  { value: "Asia/Baghdad",                  label: "Arabia Time — Baghdad" },
-  { value: "Asia/Amman",                    label: "Arabia Time — Amman" },
-  { value: "Asia/Beirut",                   label: "Eastern European Time — Beirut" },
-  { value: "Asia/Damascus",                 label: "Eastern European Time — Damascus" },
-  { value: "Asia/Jerusalem",                label: "Israel Time — Jerusalem" },
+  { value: "Asia/Tehran",                   label: "Iran Time, Tehran" },
+  { value: "Asia/Aden",                     label: "Arabia Time, Aden" },
+  { value: "Asia/Riyadh",                   label: "Arabia Time, Riyadh" },
+  { value: "Asia/Kuwait",                   label: "Arabia Time, Kuwait" },
+  { value: "Asia/Qatar",                    label: "Arabia Time, Doha" },
+  { value: "Asia/Bahrain",                  label: "Arabia Time, Manama" },
+  { value: "Asia/Dubai",                    label: "Gulf Time, Dubai" },
+  { value: "Asia/Muscat",                   label: "Gulf Time, Muscat" },
+  { value: "Asia/Baghdad",                  label: "Arabia Time, Baghdad" },
+  { value: "Asia/Amman",                    label: "Arabia Time, Amman" },
+  { value: "Asia/Beirut",                   label: "Eastern European Time, Beirut" },
+  { value: "Asia/Damascus",                 label: "Eastern European Time, Damascus" },
+  { value: "Asia/Jerusalem",                label: "Israel Time, Jerusalem" },
   // South & Central Asia
-  { value: "Asia/Kabul",                    label: "Afghanistan Time — Kabul" },
-  { value: "Asia/Karachi",                  label: "Pakistan Time — Karachi" },
-  { value: "Asia/Tashkent",                 label: "Uzbekistan Time — Tashkent" },
-  { value: "Asia/Almaty",                   label: "Kazakhstan Time — Almaty" },
-  { value: "Asia/Kolkata",                  label: "India Time — Mumbai / Delhi" },
-  { value: "Asia/Dhaka",                    label: "Bangladesh Time — Dhaka" },
-  { value: "Asia/Colombo",                  label: "Sri Lanka Time — Colombo" },
+  { value: "Asia/Kabul",                    label: "Afghanistan Time, Kabul" },
+  { value: "Asia/Karachi",                  label: "Pakistan Time, Karachi" },
+  { value: "Asia/Tashkent",                 label: "Uzbekistan Time, Tashkent" },
+  { value: "Asia/Almaty",                   label: "Kazakhstan Time, Almaty" },
+  { value: "Asia/Kolkata",                  label: "India Time, Mumbai / Delhi" },
+  { value: "Asia/Dhaka",                    label: "Bangladesh Time, Dhaka" },
+  { value: "Asia/Colombo",                  label: "Sri Lanka Time, Colombo" },
   // Southeast & East Asia
-  { value: "Asia/Yangon",                   label: "Myanmar Time — Yangon" },
-  { value: "Asia/Bangkok",                  label: "Indochina Time — Bangkok" },
-  { value: "Asia/Jakarta",                  label: "Western Indonesia Time — Jakarta" },
-  { value: "Asia/Kuala_Lumpur",             label: "Malaysia Time — Kuala Lumpur" },
-  { value: "Asia/Singapore",                label: "Singapore Time — Singapore" },
-  { value: "Asia/Manila",                   label: "Philippines Time — Manila" },
-  { value: "Asia/Shanghai",                 label: "China Time — Beijing / Shanghai" },
-  { value: "Asia/Tokyo",                    label: "Japan Time — Tokyo" },
+  { value: "Asia/Yangon",                   label: "Myanmar Time, Yangon" },
+  { value: "Asia/Bangkok",                  label: "Indochina Time, Bangkok" },
+  { value: "Asia/Jakarta",                  label: "Western Indonesia Time, Jakarta" },
+  { value: "Asia/Kuala_Lumpur",             label: "Malaysia Time, Kuala Lumpur" },
+  { value: "Asia/Singapore",                label: "Singapore Time, Singapore" },
+  { value: "Asia/Manila",                   label: "Philippines Time, Manila" },
+  { value: "Asia/Shanghai",                 label: "China Time, Beijing / Shanghai" },
+  { value: "Asia/Tokyo",                    label: "Japan Time, Tokyo" },
   // Oceania
-  { value: "Australia/Perth",               label: "Australian Western Time — Perth" },
-  { value: "Australia/Adelaide",            label: "Australian Central Time — Adelaide" },
-  { value: "Australia/Sydney",              label: "Australian Eastern Time — Sydney" },
-  { value: "Pacific/Auckland",              label: "New Zealand Time — Auckland" },
+  { value: "Australia/Perth",               label: "Australian Western Time, Perth" },
+  { value: "Australia/Adelaide",            label: "Australian Central Time, Adelaide" },
+  { value: "Australia/Sydney",              label: "Australian Eastern Time, Sydney" },
+  { value: "Pacific/Auckland",              label: "New Zealand Time, Auckland" },
 ];
 
 export const MADHABS = [
@@ -162,7 +162,7 @@ export type PrayerSettingsAdhan = {
   method: string;
   fajrAngle: string;        // used when method === "Other"
   ishaAngle: string;        // used when method === "Other"
-  ishaInterval: string;     // minutes after Maghrib — used when method === "Other"
+  ishaInterval: string;     // minutes after Maghrib, used when method === "Other"
   maghribAngle: string;     // used when method === "Other"
   // Juristic
   madhab: string;
@@ -182,7 +182,7 @@ export type PrayerSettingsAdhan = {
   adjustIsha: string;
 };
 
-// ── Named preset — full calculation config (inherits only location + timezone) ──
+// ── Named preset, full calculation config (inherits only location + timezone) ──
 export type PrayerPreset = {
   id: string;
   // Method
@@ -366,16 +366,4 @@ export function mergePresetWithLocation(
   location: { latitude: string; longitude: string; timezone: string }
 ): PrayerSettingsAdhan {
   return { ...location, ...preset };
-}
-
-// ── Shared CSS class strings ──────────────────────────────────────────────
-export const inputClsBase = `w-full px-3 py-2.5 bg-[#131313] border border-[#2a2a2a] rounded-sm text-[#c6c6c7] font-medium outline-none focus:outline-none focus:ring-0 focus:border-[#5a5a5a] placeholder-[#3a3a3a] transition-all text-sm [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`;
-export const selectClsBase = `w-full px-3 py-2.5 bg-[#131313] border border-[#2a2a2a] rounded-sm text-[#c6c6c7] font-medium outline-none focus:outline-none focus:ring-0 focus:border-[#5a5a5a] transition-all cursor-pointer appearance-none text-sm [&>option]:bg-[#131313] [&>option]:text-[#c6c6c7]`;
-export const labelCls = `block text-xs text-[#5a5a5a] font-semibold tracking-wide mb-1.5`;
-
-export function makeInputCls(_inputFocus: string) {
-  return inputClsBase;
-}
-export function makeSelectCls(_inputFocus: string) {
-  return selectClsBase;
 }
