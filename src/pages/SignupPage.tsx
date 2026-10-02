@@ -11,27 +11,37 @@ interface FieldProps {
   label: string;
   value: string;
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onBlur?: () => void;
   type?: "text" | "email" | "tel";
   placeholder?: string;
   autoComplete?: string;
   required?: boolean;
   help?: string;
+  error?: string;
 }
 
-const Field: React.FC<FieldProps> = ({ id, label, value, onChange, type = "text", placeholder, autoComplete, required, help }) => (
+const Field: React.FC<FieldProps> = ({ id, label, value, onChange, onBlur, type = "text", placeholder, autoComplete, required, help, error }) => (
   <div className="d-field">
     <label className="d-label" htmlFor={id}>
       {label}
       {!required && <span className="pub-optional"> (optional)</span>}
     </label>
     <input
-      id={id} className="d-input" type={type} value={value} onChange={onChange}
+      id={id} className="d-input" type={type} value={value} onChange={onChange} onBlur={onBlur}
       placeholder={placeholder} autoComplete={autoComplete} aria-required={required || undefined}
-      aria-describedby={help ? `${id}-help` : undefined}
+      aria-invalid={error ? true : undefined}
+      aria-describedby={error ? `${id}-error` : help ? `${id}-help` : undefined}
+      style={error ? { borderColor: "var(--d-danger)" } : undefined}
     />
-    {help && <p id={`${id}-help`} className="d-help">{help}</p>}
+    {error
+      ? <p id={`${id}-error`} className="d-help" style={{ color: "var(--d-danger)" }}>{error}</p>
+      : help && <p id={`${id}-help`} className="d-help">{help}</p>}
   </div>
 );
+
+// A valid email and a phone number with 7–15 digits (ITU E.164 range).
+const isValidEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+const isValidPhone = (v: string) => { const d = v.replace(/\D/g, ""); return d.length >= 7 && d.length <= 15; };
 
 const SignupPage: React.FC = () => {
   const navigate = useNavigate();
@@ -44,6 +54,9 @@ const SignupPage: React.FC = () => {
     masjidName: "", street: "", city: "", state: "", postalCode: "", country: "",
     masjidPhone: "", masjidEmail: "", inchargeName: "", inchargePhone: "",
   });
+  // Errors surface under a field only once it's been touched (blurred) or after a
+  // submit attempt — not up-front while the form is still empty.
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     const token = localStorage.getItem("access_token") || sessionStorage.getItem("access_token");
@@ -54,10 +67,28 @@ const SignupPage: React.FC = () => {
     setFormData(p => ({ ...p, [field]: e.target.value }));
     setError("");
   };
+  const markTouched = (field: string) => setTouched(t => ({ ...t, [field]: true }));
+
+  // Per-field validation message ("" = valid); recomputed each render so it clears
+  // the moment the field is fixed.
+  const errorFor = (field: string): string => {
+    const v = (formData as Record<string, string>)[field] ?? "";
+    switch (field) {
+      case "masjidName":    return v.trim() ? "" : "Please enter your masjid's name.";
+      case "inchargeName":  return v.trim() ? "" : "Please enter your full name.";
+      case "masjidEmail":   return !v.trim() ? "Please enter the masjid's email." : isValidEmail(v) ? "" : "Please enter a valid email, e.g. info@yourmasjid.org.";
+      case "masjidPhone":   return v && !isValidPhone(v) ? "Please enter a valid phone number." : "";
+      case "inchargePhone": return v && !isValidPhone(v) ? "Please enter a valid phone number." : "";
+      default: return "";
+    }
+  };
+  const showErr = (field: string) => (touched[field] ? errorFor(field) : "");
 
   const handleSubmit = async () => {
-    if (!formData.masjidName || !formData.masjidEmail || !formData.inchargeName) {
-      setError("Please fill in the masjid name, masjid email and your full name.");
+    const validated = ["masjidName", "masjidEmail", "inchargeName", "masjidPhone", "inchargePhone"];
+    if (validated.some(f => errorFor(f))) {
+      // Reveal each field's own inline error instead of one message at the bottom.
+      setTouched(t => ({ ...t, ...Object.fromEntries(validated.map(f => [f, true])) }));
       return;
     }
     setIsSubmitting(true);
@@ -138,6 +169,7 @@ const SignupPage: React.FC = () => {
                 <h2 id="su-masjid" className="d-h2">About your masjid</h2>
               </div>
               <Field id="su-name" label="Masjid name" required value={formData.masjidName} onChange={set("masjidName")}
+                onBlur={() => markTouched("masjidName")} error={showErr("masjidName")}
                 placeholder="Al-Noor Islamic Centre" autoComplete="organization" />
               <Field id="su-street" label="Street address" value={formData.street} onChange={set("street")}
                 placeholder="20 Overlea Blvd" autoComplete="street-address" />
@@ -155,8 +187,10 @@ const SignupPage: React.FC = () => {
               </div>
               <div className="d-grid-2">
                 <Field id="su-phone" label="Masjid phone" type="tel" value={formData.masjidPhone} onChange={set("masjidPhone")}
+                  onBlur={() => markTouched("masjidPhone")} error={showErr("masjidPhone")}
                   placeholder="+1 555 000 0000" autoComplete="tel" />
                 <Field id="su-email" label="Masjid email" type="email" required value={formData.masjidEmail} onChange={set("masjidEmail")}
+                  onBlur={() => markTouched("masjidEmail")} error={showErr("masjidEmail")}
                   placeholder="info@yourmasjid.org" autoComplete="email" help="We will send your sign-in details here." />
               </div>
             </section>
@@ -168,8 +202,10 @@ const SignupPage: React.FC = () => {
               </div>
               <div className="d-grid-2">
                 <Field id="su-contact-name" label="Your full name" required value={formData.inchargeName} onChange={set("inchargeName")}
+                  onBlur={() => markTouched("inchargeName")} error={showErr("inchargeName")}
                   placeholder="Abdullah Khan" autoComplete="name" />
                 <Field id="su-contact-phone" label="Your phone number" type="tel" value={formData.inchargePhone} onChange={set("inchargePhone")}
+                  onBlur={() => markTouched("inchargePhone")} error={showErr("inchargePhone")}
                   placeholder="+1 555 000 0000" autoComplete="tel" />
               </div>
             </section>
