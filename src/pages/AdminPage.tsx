@@ -16,6 +16,12 @@ const TABS: { id: AdminTab; label: string; short: string; icon: string }[] = [
   { id: "masjids", label: "Masjids", short: "Masjids", icon: "mosque" },
 ];
 
+// Shared default password for newly approved masjids. Must be at least 6
+// characters (Supabase's minimum) — the old "12345" was 5, so every approval
+// failed. Kept as a simple shared value for now; the masjid can change it after
+// signing in.
+const DEFAULT_PASSWORD = "123456";
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 const AdminPage: React.FC = () => {
@@ -65,7 +71,7 @@ const AdminPage: React.FC = () => {
     setActionLoading(reg.id);
     try {
       const { data: userData, error: userError } = await supabaseAdmin.auth.admin.createUser({
-        email: reg.masjid_email, password: "12345", email_confirm: true,
+        email: reg.masjid_email, password: DEFAULT_PASSWORD, email_confirm: true,
       });
       if (userError) throw new Error(userError.message);
       const { error: masjidError } = await supabaseAdmin.from("masjids").insert({
@@ -76,7 +82,7 @@ const AdminPage: React.FC = () => {
       });
       if (masjidError) throw new Error(masjidError.message);
       await supabaseAdmin.from("masjid_registrations").update({ status: "approved" }).eq("id", reg.id);
-      showToast(`${reg.masjid_name} is approved. They can sign in with ${reg.masjid_email} and the password 12345.`);
+      showToast(`${reg.masjid_name} is approved. They can sign in with ${reg.masjid_email} and the password ${DEFAULT_PASSWORD}.`);
       loadData();
     } catch (err: unknown) {
       showToast((err as Error).message, "error");
